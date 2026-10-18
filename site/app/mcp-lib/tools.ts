@@ -38,7 +38,8 @@ async function getClientAndCountry(bearerToken: string): Promise<{ client: any; 
       expiresAt: Date.now() + refreshed.expires_in * 1000,
       countryCode: tokens.countryCode,
       userId: tokens.userId,
-    };
+      profileCountry: (tokens as any).profileCountry,
+    } as any;
     await saveTidalTokens(userId, tokens);
   }
 
@@ -57,20 +58,22 @@ async function getClientAndCountry(bearerToken: string): Promise<{ client: any; 
 
   const client = createAPIClient(credentialsProvider as any);
 
-  // The OAuth token response usually has no country. Without it every catalog call would use
-  // the US catalog, whose releases can be blocked in the user's country (greyed out in the app).
-  if (!tokens.countryCode) {
+  // The country in the OAuth token response is not reliable (it can say US for a user in DE).
+  // A wrong country means the wrong catalog: those releases can be label-blocked for the user
+  // and show greyed out in the app. The profile country (/users/me) is authoritative; it is
+  // looked up once and cached with the tokens.
+  if (!(tokens as any).profileCountry) {
     try {
       const profile = await getUserProfileData(client);
       if (profile.country) {
-        tokens = { ...tokens, countryCode: profile.country };
-        await saveTidalTokens(userId, tokens);
+        tokens = { ...tokens, profileCountry: profile.country } as any;
+        await saveTidalTokens(userId, tokens!);
       }
     } catch {
-      // fall through to the fallback below
+      // fall through to the fallbacks below
     }
   }
-  const countryCode = tokens.countryCode || process.env.TIDAL_COUNTRY || 'US';
+  const countryCode = (tokens as any).profileCountry || tokens.countryCode || process.env.TIDAL_COUNTRY || 'US';
 
   return { client, countryCode };
 }
