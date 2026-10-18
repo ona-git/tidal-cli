@@ -28,6 +28,7 @@ jobs:
       TIDAL_CLIENT_ID: xFeY632WQat6UkN4
     steps:
       - name: Check secrets
+        working-directory: .
         run: |
           fail=0
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then echo "::error::Repository secret CLOUDFLARE_API_TOKEN is missing or empty"; fail=1; fi
@@ -47,8 +48,9 @@ jobs:
         run: npx wrangler deploy 2>&1 | tee ../step.log
       - name: Surface the last log lines as an annotation on failure
         if: failure()
+        working-directory: .
         run: |
-          if [ -f ../step.log ]; then
-            msg=$(tail -n 40 ../step.log | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+          if [ -f step.log ]; then
+            msg=$(tail -n 40 step.log | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
             echo "::error title=Last log lines::${msg}"
           fi
