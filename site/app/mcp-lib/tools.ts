@@ -13,21 +13,6 @@ import { getRecommendationsData } from '../../lib/cli/recommend';
 import { getMixItemsData } from '../../lib/cli/mix';
 import { getRecentlyAddedData } from '../../lib/cli/history';
 import { getUserProfileData } from '../../lib/cli/user';
-import { getTopSongsData, searchSetlistArtistsData, setSetlistApiKey } from '../../lib/cli/setlist';
-import { getCloudflareContext } from '@opennextjs/cloudflare';
-
-async function configureSetlist(): Promise<void> {
-  let key = process.env.SETLISTFM_API_KEY;
-  if (!key) {
-    try {
-      const { env } = await getCloudflareContext({ async: true });
-      key = (env as any).SETLISTFM_API_KEY;
-    } catch {
-      // not running on Cloudflare
-    }
-  }
-  setSetlistApiKey(key);
-}
 import { listSearchHistoryData, deleteSearchHistoryEntryData, clearSearchHistoryData } from '../../lib/cli/search-history';
 import { listSavedItemsData, addSavedItemData, removeSavedItemData } from '../../lib/cli/saved';
 import { createShareData } from '../../lib/cli/share';
@@ -470,27 +455,6 @@ export function registerTools(server: McpServer) {
   });
 
   // === User ===
-  // === setlist.fm (concert playlists) ===
-  server.tool('setlist_top_songs', 'Most played live songs of an artist from setlist.fm: picks the top songs among those played in the last N concerts that have songs, in the order they are played live. Also lists recent concerts, concerts without songs, upcoming shows and the next most-played songs. Counts cover the last ~60 setlists, not all-time.', {
-    artist: z.string().min(1).describe('Artist or band name'),
-    songs: z.number().int().min(1).max(20).default(5).describe('How many songs to select'),
-    recentConcerts: z.number().int().min(1).max(10).default(3).describe('How many recent concerts with songs to consider'),
-  }, { readOnlyHint: true, destructiveHint: false, openWorldHint: true, title: 'setlist.fm Top Songs' },
-  async ({ artist, songs, recentConcerts }, extra) => {
-    await getClientAndCountry(extractToken(extra)); // only signed-in users of this server
-    await configureSetlist();
-    return text(await getTopSongsData(artist, { songs, recentConcerts }));
-  });
-
-  server.tool('setlist_search_artists', 'Search setlist.fm for artists by name (to tell bands with the same name apart).', {
-    name: z.string().min(1).describe('Artist name'),
-  }, { readOnlyHint: true, destructiveHint: false, openWorldHint: true, title: 'setlist.fm Artist Search' },
-  async ({ name }, extra) => {
-    await getClientAndCountry(extractToken(extra));
-    await configureSetlist();
-    return text(await searchSetlistArtistsData(name));
-  });
-
   server.tool('tidal_user_profile', 'Get your Tidal user profile', {},
   { readOnlyHint: true, destructiveHint: false, openWorldHint: false, title: 'User Profile' },
   async (_args, extra) => {

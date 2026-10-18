@@ -46,15 +46,6 @@ jobs:
         run: npx opennextjs-cloudflare build 2>&1 | tee ../step.log
       - name: Deploy
         run: npx wrangler deploy 2>&1 | tee ../step.log
-      - name: Set setlist.fm API key (optional secret)
-        env:
-          SETLISTFM_API_KEY: ${{ secrets.SETLISTFM_API_KEY }}
-        run: |
-          if [ -n "$SETLISTFM_API_KEY" ]; then
-            printf '%s' "$SETLISTFM_API_KEY" | npx wrangler secret put SETLISTFM_API_KEY 2>&1 | tee ../step.log
-          else
-            echo "::warning::SETLISTFM_API_KEY repository secret not set; setlist tools will report that they are not configured."
-          fi
       - name: Surface the last log lines as an annotation on failure
         if: failure()
         working-directory: .
