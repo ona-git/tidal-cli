@@ -15,6 +15,8 @@ export interface MatchedEntry {
   tidalArtists: string[];
   /** 'exact' = same artist and same title; 'variant' = same artist, title with an extra suffix (e.g. "(Remastered)") */
   match: 'exact' | 'variant';
+  /** Can this track be streamed by a subscriber in the user's country? null = TIDAL gave no usable information. */
+  playable: boolean | null;
 }
 
 export interface MissingEntry {
@@ -28,6 +30,8 @@ export interface PlaylistFromListResult {
   dryRun: boolean;
   playlist?: { id: string; name: string; url: string };
   matched: MatchedEntry[];
+  /** Lines whose best match exists in the catalog but is NOT streamable in the user's country */
+  unplayable: string[];
   notFound: MissingEntry[];
   duplicates: string[];
   invalidLines: string[];
@@ -79,32 +83,66 @@ function artistMatches(wanted: string, found: string[]): boolean {
   return found.some((a) => normalize(a) === w);
 }
 
-type TrackInfoLite = { title: string; artists: string[] };
+type TrackInfoLite = { title: string; artists: string[]; playable: boolean | null };
 
-/** One call for up to 20 tracks: GET /tracks?filter[id]=...&include=artists */
+/**
+ * One call for up to 20 tracks: GET /tracks?filter[id]=...&include=artists,usageRules
+ * `playable` = TIDAL's usage rules for the user's country allow STREAM for subscribers (or free tier);
+ * falls back to the deprecated `availability` attribute; null when neither is present.
+ */
 async function getTrackArtistsBatch(ids: string[], client: any, countryCode: string): Promise<Map<string, TrackInfoLite>> {
   const out = new Map<string, TrackInfoLite>();
   if (ids.length === 0) return out;
   const { data, error } = await getWithRetry(client, '/tracks', {
-    params: { query: { countryCode, 'filter[id]': [ids.join(',')], include: ['artists'] } as any },
+    params: { query: { countryCode, 'filter[id]': [ids.join(',')], include: ['artists', 'usageRules'] } as any },
   });
   if (error || !data) {
     throw new Error(`Failed to get tracks — ${JSON.stringify(error)}`);
   }
   const artistNames = new Map<string, string>();
+  const rulesById = new Map<string, any>();
   for (const inc of (data as any).included ?? []) {
     if (inc.type === 'artists') artistNames.set(inc.id, inc.attributes?.name ?? inc.id);
+    if (inc.type === 'usageRules') rulesById.set(inc.id, inc.attributes ?? {});
   }
   const rows = Array.isArray((data as any).data) ? (data as any).data : [(data as any).data];
   for (const row of rows) {
     if (!row?.id) continue;
     const refs: any[] = row.relationships?.artists?.data ?? [];
+    const ruleRefs: any[] = row.relationships?.usageRules?.data ?? [];
+    const rules = ruleRefs.map((r) => rulesById.get(r.id)).filter(Boolean);
+    const forCountry = rules.filter((r) => !r.countryCode || r.countryCode === countryCode);
+    let playable: boolean | null = null;
+    if (forCountry.length > 0) {
+      playable = forCountry.some((r) => (r.subscription ?? []).includes('STREAM') || (r.free ?? []).includes('STREAM'));
+    } else if (Array.isArray(row.attributes?.availability)) {
+      playable = row.attributes.availability.includes('STREAM');
+    }
     out.set(row.id, {
       title: row.attributes?.title ?? 'Unknown',
       artists: refs.map((r) => artistNames.get(r.id)).filter((n): n is string => !!n),
+      playable,
     });
   }
   return out;
+}
+
+/** Availability check for known track ids (e.g. to see why a track is greyed out). */
+export async function checkTracksData(
+  trackIds: string[],
+  client: any,
+  countryCode: string,
+): Promise<Array<{ trackId: string; title: string; artists: string[]; playable: boolean | null; country: string }>> {
+  const result: Array<{ trackId: string; title: string; artists: string[]; playable: boolean | null; country: string }> = [];
+  for (let i = 0; i < trackIds.length; i += 20) {
+    const chunk = trackIds.slice(i, i + 20);
+    const infos = await getTrackArtistsBatch(chunk, client, countryCode);
+    for (const id of chunk) {
+      const info = infos.get(id);
+      result.push({ trackId: id, title: info?.title ?? 'not found', artists: info?.artists ?? [], playable: info ? info.playable : null, country: countryCode });
+    }
+  }
+  return result;
 }
 
 async function findTrack(
@@ -115,6 +153,7 @@ async function findTrack(
   const queries = [`${entry.artist} ${entry.title}`, entry.title];
   const seen = new Map<string, TrackInfoLite>();
   let variant: MatchedEntry | undefined;
+  let blocked: MatchedEntry | undefined; // exact match that exists but cannot be streamed in this country
 
   for (const query of queries) {
     const results = await searchData('track', query, client, countryCode);
@@ -130,24 +169,24 @@ async function findTrack(
       seen.set(r.id, info);
       if (!artistMatches(entry.artist, info.artists)) continue;
       const rel = titleRelation(entry.title, info.title);
-      if (rel === 'exact') {
-        return {
-          hit: { line: entry.raw, trackId: r.id, tidalTitle: info.title, tidalArtists: info.artists, match: 'exact' },
-          candidates: [],
-        };
+      if (rel === 'none') continue;
+      const hit: MatchedEntry = { line: entry.raw, trackId: r.id, tidalTitle: info.title, tidalArtists: info.artists, match: rel, playable: info.playable };
+      if (info.playable === false) {
+        if (!blocked) blocked = hit;
+        continue;
       }
-      if (rel === 'variant' && !variant) {
-        variant = { line: entry.raw, trackId: r.id, tidalTitle: info.title, tidalArtists: info.artists, match: 'variant' };
-      }
+      if (rel === 'exact') return { hit, candidates: [] };
+      if (!variant) variant = hit;
     }
     if (variant) return { hit: variant, candidates: [] };
 
     // Keep a few unfiltered results (title only) as suggestions in case nothing matched.
     for (const r of results.slice(0, 5)) {
-      if (!seen.has(r.id)) seen.set(r.id, { title: r.name, artists: [] });
+      if (!seen.has(r.id)) seen.set(r.id, { title: r.name, artists: [], playable: null });
     }
   }
 
+  if (blocked) return { hit: blocked, candidates: [] };
   const candidates = [...seen.entries()].slice(0, 5).map(([trackId, v]) => ({ trackId, title: v.title, artists: v.artists }));
   return { candidates };
 }
@@ -168,6 +207,7 @@ export async function createPlaylistFromListData(
   const matched: MatchedEntry[] = [];
   const notFound: MissingEntry[] = [];
   const duplicates: string[] = [];
+  const unplayable: string[] = [];
   const usedIds = new Set<string>();
 
   for (const entry of entries) {
@@ -189,11 +229,13 @@ export async function createPlaylistFromListData(
     }
     usedIds.add(found.hit.trackId);
     matched.push(found.hit);
+    if (found.hit.playable === false) unplayable.push(entry.raw);
   }
 
   const result: PlaylistFromListResult = {
     dryRun: !!options.dryRun,
     matched,
+    unplayable,
     notFound,
     duplicates,
     invalidLines: invalid,
