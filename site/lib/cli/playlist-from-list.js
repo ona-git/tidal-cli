@@ -5,6 +5,7 @@ exports.parseList = parseList;
 exports.createPlaylistFromListData = createPlaylistFromListData;
 const search_1 = require("./search");
 const playlist_1 = require("./playlist");
+const retry_1 = require("./retry");
 /** Lower-case, strip diacritics and punctuation, collapse whitespace. */
 function normalize(s) {
     return s
@@ -51,17 +52,33 @@ function artistMatches(wanted, found) {
     const w = normalize(wanted);
     return found.some((a) => normalize(a) === w);
 }
-async function getTrackArtists(trackId, client, countryCode) {
-    const { data, error } = await client.GET('/tracks/{id}', {
-        params: { path: { id: trackId }, query: { countryCode, include: ['artists'] } },
+/** One call for up to 20 tracks: GET /tracks?filter[id]=...&include=artists */
+async function getTrackArtistsBatch(ids, client, countryCode) {
+    const out = new Map();
+    if (ids.length === 0)
+        return out;
+    const { data, error } = await (0, retry_1.getWithRetry)(client, '/tracks', {
+        params: { query: { countryCode, 'filter[id]': [ids.join(',')], include: ['artists'] } },
     });
     if (error || !data) {
-        throw new Error(`Failed to get track ${trackId} — ${JSON.stringify(error)}`);
+        throw new Error(`Failed to get tracks — ${JSON.stringify(error)}`);
     }
-    const attrs = data.data?.attributes ?? {};
-    const included = data.included ?? [];
-    const artists = included.filter((i) => i.type === 'artists').map((i) => i.attributes?.name ?? i.id);
-    return { title: attrs.title ?? 'Unknown', artists };
+    const artistNames = new Map();
+    for (const inc of data.included ?? []) {
+        if (inc.type === 'artists')
+            artistNames.set(inc.id, inc.attributes?.name ?? inc.id);
+    }
+    const rows = Array.isArray(data.data) ? data.data : [data.data];
+    for (const row of rows) {
+        if (!row?.id)
+            continue;
+        const refs = row.relationships?.artists?.data ?? [];
+        out.set(row.id, {
+            title: row.attributes?.title ?? 'Unknown',
+            artists: refs.map((r) => artistNames.get(r.id)).filter((n) => !!n),
+        });
+    }
+    return out;
 }
 async function findTrack(entry, client, countryCode) {
     const queries = [`${entry.artist} ${entry.title}`, entry.title];
@@ -72,9 +89,12 @@ async function findTrack(entry, client, countryCode) {
         // Only look up artists for tracks whose title is plausibly the wanted one (keeps API calls low).
         const plausible = results
             .filter((r) => titleRelation(entry.title, r.name) !== 'none' && !seen.has(r.id))
-            .slice(0, 8);
+            .slice(0, 20);
+        const infos = await getTrackArtistsBatch(plausible.map((r) => r.id), client, countryCode);
         for (const r of plausible) {
-            const info = await getTrackArtists(r.id, client, countryCode);
+            const info = infos.get(r.id);
+            if (!info)
+                continue;
             seen.set(r.id, info);
             if (!artistMatches(entry.artist, info.artists))
                 continue;
@@ -112,6 +132,8 @@ async function createPlaylistFromListData(name, lines, client, countryCode, opti
     const duplicates = [];
     const usedIds = new Set();
     for (const entry of entries) {
+        if (matched.length + notFound.length + duplicates.length > 0)
+            await (0, retry_1.sleep)(250); // gentle pacing against API rate limits
         let found;
         try {
             found = await findTrack(entry, client, countryCode);

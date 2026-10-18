@@ -1,4 +1,5 @@
 import { getApiClient, getCountryCode } from './auth';
+import { getWithRetry } from './retry';
 import type { SearchType, SearchResult, SearchSuggestionsResult } from './types';
 export type { SearchType, SearchResult, SearchSuggestionsResult };
 
@@ -24,7 +25,7 @@ export async function searchData(type: SearchType, query: string, client: any, c
 
   // TIDAL API: the search term is now the `filter[query]` query parameter of GET /searchResults.
   // (The former GET /searchResults/{id} with the term as path id now answers INVALID_RESOURCE_ID.)
-  const { data, error } = await client.GET('/searchResults' as any, {
+  const { data, error } = await getWithRetry(client, '/searchResults', {
     params: {
       query: {
         'filter[query]': query,

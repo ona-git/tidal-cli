@@ -5,6 +5,7 @@ exports.search = search;
 exports.searchSuggestionsData = searchSuggestionsData;
 exports.searchSuggestions = searchSuggestions;
 const auth_1 = require("./auth");
+const retry_1 = require("./retry");
 function formatDuration(isoDuration) {
     if (!isoDuration)
         return '';
@@ -27,7 +28,7 @@ async function searchData(type, query, client, countryCode) {
     };
     // TIDAL API: the search term is now the `filter[query]` query parameter of GET /searchResults.
     // (The former GET /searchResults/{id} with the term as path id now answers INVALID_RESOURCE_ID.)
-    const { data, error } = await client.GET('/searchResults', {
+    const { data, error } = await (0, retry_1.getWithRetry)(client, '/searchResults', {
         params: {
             query: {
                 'filter[query]': query,
