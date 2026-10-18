@@ -6,7 +6,7 @@ import { searchData, searchSuggestionsData } from '../../lib/cli/search';
 import { getArtistInfoData, getArtistTracksData, getArtistAlbumsData, getSimilarArtistsData, getArtistRadioData } from '../../lib/cli/artist';
 import { getTrackInfoData, getTrackRadioData, getTrackByIsrcData, getSimilarTracksData } from '../../lib/cli/track';
 import { getAlbumInfoData, getAlbumByBarcodeData } from '../../lib/cli/album';
-import { listPlaylistsData, createPlaylistData, renamePlaylistData, deletePlaylistData, addTrackToPlaylistData, removeTrackFromPlaylistData, addAlbumToPlaylistData, moveTrackInPlaylistData, updatePlaylistDescriptionData } from '../../lib/cli/playlist';
+import { listPlaylistsData, createPlaylistData, renamePlaylistData, deletePlaylistData, addTrackToPlaylistData, removeTrackFromPlaylistData, addAlbumToPlaylistData, moveTrackInPlaylistData, updatePlaylistDescriptionData, playlistItemsData } from '../../lib/cli/playlist';
 import { addToLibraryData, removeFromLibraryData, listFavoritedPlaylistsData, addPlaylistToFavoritesData, removePlaylistFromFavoritesData } from '../../lib/cli/library';
 import { playbackInfoData, playbackUrlData } from '../../lib/cli/playback';
 import { getRecommendationsData } from '../../lib/cli/recommend';
@@ -215,6 +215,14 @@ export function registerTools(server: McpServer) {
   async ({ trackIds }, extra) => {
     const { client, countryCode } = await getClientAndCountry(extractToken(extra));
     return text(await checkTracksData(trackIds, client, countryCode));
+  });
+
+  server.tool('tidal_playlist_items', 'List the tracks of a playlist in order, with track id, album, ISRC, version and availability for each item. Use it to compare two copies of the same song.', {
+    playlistId: z.string().describe('Playlist ID'),
+  }, { readOnlyHint: true, destructiveHint: false, openWorldHint: true, title: 'Playlist Items' },
+  async ({ playlistId }, extra) => {
+    const { client, countryCode } = await getClientAndCountry(extractToken(extra));
+    return text(await playlistItemsData(playlistId, client, countryCode));
   });
 
   server.tool('tidal_playlist_rename', 'Rename a playlist', {
