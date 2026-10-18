@@ -11,5 +11,9 @@
   "d1_databases": [
     { "binding": "DB", "database_name": "tidal-mcp", "database_id": "48288fae-44d5-40d0-96e1-53313ce9379d" }
   ],
+  "vars": {
+    "TIDAL_CLIENT_ID": "xFeY632WQat6UkN4",
+    "NEXT_PUBLIC_SITE_URL": "https://tidal-mcp.nelson-ona.workers.dev"
+  },
   "observability": { "enabled": true }
 }

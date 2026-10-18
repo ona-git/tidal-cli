@@ -1,3 +1,15 @@
+# Deploy via GitHub Actions (current method)
+
+Workflow: `.github/workflows/deploy-cloudflare.yml` (runs on push to `main` touching `site/`, or manually).
+Needs two repository secrets (GitHub > Settings > Secrets and variables > Actions):
+`CLOUDFLARE_API_TOKEN` (template "Edit Cloudflare Workers") and `CLOUDFLARE_ACCOUNT_ID`.
+Public values (Tidal client ID, site URL) live in `site/wrangler.jsonc` `vars` and in the workflow env.
+The Worker name is `tidal-mcp` -> https://tidal-mcp.nelson-ona.workers.dev. Disable the Git integration of any
+other Cloudflare Worker for this repo so only one builder deploys.
+
+---
+(Older notes for the dashboard-based method follow.)
+
 # Deploy on Cloudflare Workers (personal Tidal MCP server)
 
 Everything below is done in the Cloudflare / Tidal / Upstash dashboards. Do not paste secrets in chats.
