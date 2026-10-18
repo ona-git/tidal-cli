@@ -1,5 +1,6 @@
 import { searchData } from './search';
 import { createPlaylistData } from './playlist';
+import { getWithRetry, sleep } from './retry';
 
 export interface ListEntry {
   raw: string;
@@ -78,17 +79,32 @@ function artistMatches(wanted: string, found: string[]): boolean {
   return found.some((a) => normalize(a) === w);
 }
 
-async function getTrackArtists(trackId: string, client: any, countryCode: string): Promise<{ title: string; artists: string[] }> {
-  const { data, error } = await client.GET('/tracks/{id}', {
-    params: { path: { id: trackId }, query: { countryCode, include: ['artists'] as any } },
+type TrackInfoLite = { title: string; artists: string[] };
+
+/** One call for up to 20 tracks: GET /tracks?filter[id]=...&include=artists */
+async function getTrackArtistsBatch(ids: string[], client: any, countryCode: string): Promise<Map<string, TrackInfoLite>> {
+  const out = new Map<string, TrackInfoLite>();
+  if (ids.length === 0) return out;
+  const { data, error } = await getWithRetry(client, '/tracks', {
+    params: { query: { countryCode, 'filter[id]': [ids.join(',')], include: ['artists'] } as any },
   });
   if (error || !data) {
-    throw new Error(`Failed to get track ${trackId} — ${JSON.stringify(error)}`);
+    throw new Error(`Failed to get tracks — ${JSON.stringify(error)}`);
   }
-  const attrs = (data as any).data?.attributes ?? {};
-  const included = (data as any).included ?? [];
-  const artists = included.filter((i: any) => i.type === 'artists').map((i: any) => i.attributes?.name ?? i.id);
-  return { title: attrs.title ?? 'Unknown', artists };
+  const artistNames = new Map<string, string>();
+  for (const inc of (data as any).included ?? []) {
+    if (inc.type === 'artists') artistNames.set(inc.id, inc.attributes?.name ?? inc.id);
+  }
+  const rows = Array.isArray((data as any).data) ? (data as any).data : [(data as any).data];
+  for (const row of rows) {
+    if (!row?.id) continue;
+    const refs: any[] = row.relationships?.artists?.data ?? [];
+    out.set(row.id, {
+      title: row.attributes?.title ?? 'Unknown',
+      artists: refs.map((r) => artistNames.get(r.id)).filter((n): n is string => !!n),
+    });
+  }
+  return out;
 }
 
 async function findTrack(
@@ -97,7 +113,7 @@ async function findTrack(
   countryCode: string,
 ): Promise<{ hit?: MatchedEntry; candidates: MissingEntry['candidates'] }> {
   const queries = [`${entry.artist} ${entry.title}`, entry.title];
-  const seen = new Map<string, { title: string; artists: string[] }>();
+  const seen = new Map<string, TrackInfoLite>();
   let variant: MatchedEntry | undefined;
 
   for (const query of queries) {
@@ -105,10 +121,12 @@ async function findTrack(
     // Only look up artists for tracks whose title is plausibly the wanted one (keeps API calls low).
     const plausible = results
       .filter((r) => titleRelation(entry.title, r.name) !== 'none' && !seen.has(r.id))
-      .slice(0, 8);
+      .slice(0, 20);
 
+    const infos = await getTrackArtistsBatch(plausible.map((r) => r.id), client, countryCode);
     for (const r of plausible) {
-      const info = await getTrackArtists(r.id, client, countryCode);
+      const info = infos.get(r.id);
+      if (!info) continue;
       seen.set(r.id, info);
       if (!artistMatches(entry.artist, info.artists)) continue;
       const rel = titleRelation(entry.title, info.title);
@@ -153,6 +171,7 @@ export async function createPlaylistFromListData(
   const usedIds = new Set<string>();
 
   for (const entry of entries) {
+    if (matched.length + notFound.length + duplicates.length > 0) await sleep(250); // gentle pacing against API rate limits
     let found: Awaited<ReturnType<typeof findTrack>>;
     try {
       found = await findTrack(entry, client, countryCode);

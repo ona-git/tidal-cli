@@ -15,13 +15,19 @@ const tracks: Record<string, { title: string; artists: string[] }> = {
 };
 
 const client = {
+  // Batched lookup: GET /tracks?filter[id]=a,b,c&include=artists
   GET: vi.fn(async (_path: string, opts: any) => {
-    const t = tracks[opts.params.path.id];
+    const ids: string[] = opts.params.query['filter[id]'][0].split(',');
     return {
       data: {
-        data: { id: opts.params.path.id, attributes: { title: t.title } },
-        included: t.artists.map((a, i) => ({ type: 'artists', id: `a${i}`, attributes: { name: a } })),
+        data: ids.map((id) => ({
+          id,
+          attributes: { title: tracks[id].title },
+          relationships: { artists: { data: tracks[id].artists.map((_, i) => ({ id: `${id}a${i}` })) } },
+        })),
+        included: ids.flatMap((id) => tracks[id].artists.map((a, i) => ({ type: 'artists', id: `${id}a${i}`, attributes: { name: a } }))),
       },
+      response: { status: 200 },
     };
   }),
   POST: vi.fn(async () => ({ data: {} })),
