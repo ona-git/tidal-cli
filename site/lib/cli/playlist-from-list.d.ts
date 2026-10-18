@@ -10,6 +10,8 @@ export interface MatchedEntry {
     tidalArtists: string[];
     /** 'exact' = same artist and same title; 'variant' = same artist, title with an extra suffix (e.g. "(Remastered)") */
     match: 'exact' | 'variant';
+    /** Can this track be streamed by a subscriber in the user's country? null = TIDAL gave no usable information. */
+    playable: boolean | null;
 }
 export interface MissingEntry {
     line: string;
@@ -29,6 +31,8 @@ export interface PlaylistFromListResult {
         url: string;
     };
     matched: MatchedEntry[];
+    /** Lines whose best match exists in the catalog but is NOT streamable in the user's country */
+    unplayable: string[];
     notFound: MissingEntry[];
     duplicates: string[];
     invalidLines: string[];
@@ -39,6 +43,14 @@ export declare function parseList(lines: string[]): {
     entries: ListEntry[];
     invalid: string[];
 };
+/** Availability check for known track ids (e.g. to see why a track is greyed out). */
+export declare function checkTracksData(trackIds: string[], client: any, countryCode: string): Promise<Array<{
+    trackId: string;
+    title: string;
+    artists: string[];
+    playable: boolean | null;
+    country: string;
+}>>;
 /**
  * Takes lines in the form "Artist - Title", resolves each to a Tidal track requiring an exact artist
  * match, creates one playlist in list order and reports what could not be found.

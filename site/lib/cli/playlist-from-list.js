@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.normalize = normalize;
 exports.parseList = parseList;
+exports.checkTracksData = checkTracksData;
 exports.createPlaylistFromListData = createPlaylistFromListData;
 const search_1 = require("./search");
 const playlist_1 = require("./playlist");
@@ -52,38 +53,70 @@ function artistMatches(wanted, found) {
     const w = normalize(wanted);
     return found.some((a) => normalize(a) === w);
 }
-/** One call for up to 20 tracks: GET /tracks?filter[id]=...&include=artists */
+/**
+ * One call for up to 20 tracks: GET /tracks?filter[id]=...&include=artists,usageRules
+ * `playable` = TIDAL's usage rules for the user's country allow STREAM for subscribers (or free tier);
+ * falls back to the deprecated `availability` attribute; null when neither is present.
+ */
 async function getTrackArtistsBatch(ids, client, countryCode) {
     const out = new Map();
     if (ids.length === 0)
         return out;
     const { data, error } = await (0, retry_1.getWithRetry)(client, '/tracks', {
-        params: { query: { countryCode, 'filter[id]': [ids.join(',')], include: ['artists'] } },
+        params: { query: { countryCode, 'filter[id]': [ids.join(',')], include: ['artists', 'usageRules'] } },
     });
     if (error || !data) {
         throw new Error(`Failed to get tracks — ${JSON.stringify(error)}`);
     }
     const artistNames = new Map();
+    const rulesById = new Map();
     for (const inc of data.included ?? []) {
         if (inc.type === 'artists')
             artistNames.set(inc.id, inc.attributes?.name ?? inc.id);
+        if (inc.type === 'usageRules')
+            rulesById.set(inc.id, inc.attributes ?? {});
     }
     const rows = Array.isArray(data.data) ? data.data : [data.data];
     for (const row of rows) {
         if (!row?.id)
             continue;
         const refs = row.relationships?.artists?.data ?? [];
+        const ruleRefs = row.relationships?.usageRules?.data ?? [];
+        const rules = ruleRefs.map((r) => rulesById.get(r.id)).filter(Boolean);
+        const forCountry = rules.filter((r) => !r.countryCode || r.countryCode === countryCode);
+        let playable = null;
+        if (forCountry.length > 0) {
+            playable = forCountry.some((r) => (r.subscription ?? []).includes('STREAM') || (r.free ?? []).includes('STREAM'));
+        }
+        else if (Array.isArray(row.attributes?.availability)) {
+            playable = row.attributes.availability.includes('STREAM');
+        }
         out.set(row.id, {
             title: row.attributes?.title ?? 'Unknown',
             artists: refs.map((r) => artistNames.get(r.id)).filter((n) => !!n),
+            playable,
         });
     }
     return out;
+}
+/** Availability check for known track ids (e.g. to see why a track is greyed out). */
+async function checkTracksData(trackIds, client, countryCode) {
+    const result = [];
+    for (let i = 0; i < trackIds.length; i += 20) {
+        const chunk = trackIds.slice(i, i + 20);
+        const infos = await getTrackArtistsBatch(chunk, client, countryCode);
+        for (const id of chunk) {
+            const info = infos.get(id);
+            result.push({ trackId: id, title: info?.title ?? 'not found', artists: info?.artists ?? [], playable: info ? info.playable : null, country: countryCode });
+        }
+    }
+    return result;
 }
 async function findTrack(entry, client, countryCode) {
     const queries = [`${entry.artist} ${entry.title}`, entry.title];
     const seen = new Map();
     let variant;
+    let blocked; // exact match that exists but cannot be streamed in this country
     for (const query of queries) {
         const results = await (0, search_1.searchData)('track', query, client, countryCode);
         // Only look up artists for tracks whose title is plausibly the wanted one (keeps API calls low).
@@ -99,24 +132,29 @@ async function findTrack(entry, client, countryCode) {
             if (!artistMatches(entry.artist, info.artists))
                 continue;
             const rel = titleRelation(entry.title, info.title);
-            if (rel === 'exact') {
-                return {
-                    hit: { line: entry.raw, trackId: r.id, tidalTitle: info.title, tidalArtists: info.artists, match: 'exact' },
-                    candidates: [],
-                };
+            if (rel === 'none')
+                continue;
+            const hit = { line: entry.raw, trackId: r.id, tidalTitle: info.title, tidalArtists: info.artists, match: rel, playable: info.playable };
+            if (info.playable === false) {
+                if (!blocked)
+                    blocked = hit;
+                continue;
             }
-            if (rel === 'variant' && !variant) {
-                variant = { line: entry.raw, trackId: r.id, tidalTitle: info.title, tidalArtists: info.artists, match: 'variant' };
-            }
+            if (rel === 'exact')
+                return { hit, candidates: [] };
+            if (!variant)
+                variant = hit;
         }
         if (variant)
             return { hit: variant, candidates: [] };
         // Keep a few unfiltered results (title only) as suggestions in case nothing matched.
         for (const r of results.slice(0, 5)) {
             if (!seen.has(r.id))
-                seen.set(r.id, { title: r.name, artists: [] });
+                seen.set(r.id, { title: r.name, artists: [], playable: null });
         }
     }
+    if (blocked)
+        return { hit: blocked, candidates: [] };
     const candidates = [...seen.entries()].slice(0, 5).map(([trackId, v]) => ({ trackId, title: v.title, artists: v.artists }));
     return { candidates };
 }
@@ -130,6 +168,7 @@ async function createPlaylistFromListData(name, lines, client, countryCode, opti
     const matched = [];
     const notFound = [];
     const duplicates = [];
+    const unplayable = [];
     const usedIds = new Set();
     for (const entry of entries) {
         if (matched.length + notFound.length + duplicates.length > 0)
@@ -152,10 +191,13 @@ async function createPlaylistFromListData(name, lines, client, countryCode, opti
         }
         usedIds.add(found.hit.trackId);
         matched.push(found.hit);
+        if (found.hit.playable === false)
+            unplayable.push(entry.raw);
     }
     const result = {
         dryRun: !!options.dryRun,
         matched,
+        unplayable,
         notFound,
         duplicates,
         invalidLines: invalid,

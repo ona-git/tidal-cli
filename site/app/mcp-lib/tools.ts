@@ -20,7 +20,7 @@ import { createShareData } from '../../lib/cli/share';
 import { getTidalTokens, getAccessTokenUserId, saveTidalTokens } from './redis';
 import { refreshTidalToken } from './tidal-oauth';
 import { TIDAL_CLIENT_ID } from './constants';
-import { createPlaylistFromListData } from '../../lib/cli/playlist-from-list';
+import { createPlaylistFromListData, checkTracksData } from '../../lib/cli/playlist-from-list';
 
 async function getClientAndCountry(bearerToken: string): Promise<{ client: any; countryCode: string }> {
   const userId = await getAccessTokenUserId(bearerToken);
@@ -207,6 +207,14 @@ export function registerTools(server: McpServer) {
   async ({ name, lines, dryRun, description }, extra) => {
     const { client, countryCode } = await getClientAndCountry(extractToken(extra));
     return text(await createPlaylistFromListData(name, lines, client, countryCode, { dryRun, description }));
+  });
+
+  server.tool('tidal_check_tracks', 'Check whether tracks can be streamed in your country (TIDAL usage rules). Use it to find out why a track is greyed out in the app. Returns title, artists and playable (true/false/null = unknown) for each track id.', {
+    trackIds: z.array(z.string()).min(1).max(60).describe('TIDAL track ids'),
+  }, { readOnlyHint: true, destructiveHint: false, openWorldHint: true, title: 'Check Track Availability' },
+  async ({ trackIds }, extra) => {
+    const { client, countryCode } = await getClientAndCountry(extractToken(extra));
+    return text(await checkTracksData(trackIds, client, countryCode));
   });
 
   server.tool('tidal_playlist_rename', 'Rename a playlist', {
