@@ -7,8 +7,8 @@ developer.tidal.com/dashboard → Create App. Copy the **Client ID** (no secret 
 Scopes to enable: `user.read search.read playlists.read playlists.write`.
 Redirect URI: `https://<YOUR-WORKER-URL>/api/callback` (you get the URL after the first deploy, then add it here).
 
-## 2. Upstash Redis (free)
-upstash.com → Create Database → copy REST URL and REST token.
+## 2. Storage
+Cloudflare D1 database `tidal-mcp` (already created in your account; bound as `DB` in `site/wrangler.jsonc`). No Upstash needed.
 
 ## 3. Cloudflare: Workers & Pages → Create → Import a repository (your fork, branch `feat/playlist-from-list` or `main` after merging)
 - Root directory: `site`
@@ -17,7 +17,8 @@ upstash.com → Create Database → copy REST URL and REST token.
 - Deploy command: `npx wrangler deploy`
   (the extra packages are installed in the build command so that the committed package-lock.json stays valid)
 - Build variables: `NEXT_PUBLIC_SITE_URL=https://<YOUR-WORKER-URL>` (inlined at build time → set it, then redeploy once you know the URL)
-- Runtime variables/secrets (Settings → Variables and Secrets): `TIDAL_CLIENT_ID`, `NEXT_PUBLIC_SITE_URL`, `KV_REST_API_URL`, `KV_REST_API_TOKEN` (the last two as secrets). Optional: `TIDAL_SCOPES`.
+- Build variable `NODE_VERSION` = `22`.
+- Runtime variables (Settings → Variables and Secrets): `TIDAL_CLIENT_ID`, `NEXT_PUBLIC_SITE_URL`. Optional: `TIDAL_SCOPES`.
 
 ## 4. Claude
 Settings → Connectors → Add custom connector → `https://<YOUR-WORKER-URL>/api/mcp`, then sign in with Tidal.

@@ -8,5 +8,8 @@
     "directory": ".open-next/assets",
     "binding": "ASSETS"
   },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "tidal-mcp", "database_id": "48288fae-44d5-40d0-96e1-53313ce9379d" }
+  ],
   "observability": { "enabled": true }
 }
