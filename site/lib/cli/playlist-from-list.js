@@ -81,7 +81,8 @@ async function getTrackArtistsBatch(ids, client, countryCode) {
         if (!row?.id)
             continue;
         const refs = row.relationships?.artists?.data ?? [];
-        const ruleRefs = row.relationships?.usageRules?.data ?? [];
+        const ruleData = row.relationships?.usageRules?.data;
+        const ruleRefs = Array.isArray(ruleData) ? ruleData : ruleData ? [ruleData] : [];
         const rules = ruleRefs.map((r) => rulesById.get(r.id)).filter(Boolean);
         const forCountry = rules.filter((r) => !r.countryCode || r.countryCode === countryCode);
         let playable = null;
