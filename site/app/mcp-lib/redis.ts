@@ -82,6 +82,8 @@ export interface TidalTokens {
   refreshToken: string;
   expiresAt: number;
   countryCode?: string;
+  /** Country from /users/me — authoritative, the token's country can be wrong */
+  profileCountry?: string;
   userId?: string;
 }
 
