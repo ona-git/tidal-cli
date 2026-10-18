@@ -22,13 +22,15 @@ export async function searchData(type: SearchType, query: string, client: any, c
     playlist: 'playlists',
   };
 
-  const { data, error } = await client.GET('/searchResults/{id}', {
+  // TIDAL API: the search term is now the `filter[query]` query parameter of GET /searchResults.
+  // (The former GET /searchResults/{id} with the term as path id now answers INVALID_RESOURCE_ID.)
+  const { data, error } = await client.GET('/searchResults' as any, {
     params: {
-      path: { id: query },
       query: {
+        'filter[query]': query,
         countryCode,
         include: [includeMap[type] as any],
-      },
+      } as any,
     },
   });
 
@@ -148,10 +150,10 @@ export async function search(type: SearchType, query: string, json: boolean): Pr
 }
 
 export async function searchSuggestionsData(query: string, client: any, countryCode: string): Promise<SearchSuggestionsResult> {
-  const { data, error } = await client.GET('/searchSuggestions/{id}' as any, {
+  const { data, error } = await client.GET('/searchSuggestions' as any, {
     params: {
-      path: { id: query },
       query: {
+        'filter[query]': query,
         countryCode,
         include: ['directHits'] as any,
       } as any,
@@ -162,7 +164,8 @@ export async function searchSuggestionsData(query: string, client: any, countryC
     throw new Error(`Failed to get search suggestions — ${JSON.stringify(error)}`);
   }
 
-  const attrs = (data as any).data?.attributes ?? {};
+  const resource = Array.isArray((data as any).data) ? (data as any).data[0] : (data as any).data;
+  const attrs = resource?.attributes ?? {};
   const suggestions = (attrs.suggestions ?? []).map((s: any) => s.query ?? s);
   const included = (data as any).included ?? [];
 

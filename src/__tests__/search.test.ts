@@ -37,6 +37,17 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe('search request format', () => {
+  it('sends the term as filter[query] to GET /searchResults', async () => {
+    mockClient.GET.mockResolvedValue({ data: { included: [] } });
+    await search('track', 'Fyrnask Vigil', true);
+    const [path, opts] = mockClient.GET.mock.calls[0];
+    expect(path).toBe('/searchResults');
+    expect(opts.params.query['filter[query]']).toBe('Fyrnask Vigil');
+    expect(opts.params.path).toBeUndefined();
+  });
+});
+
 describe('search', () => {
   describe('artist search', () => {
     it('returns artist results sorted by popularity', async () => {
