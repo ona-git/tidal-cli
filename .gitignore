@@ -23,3 +23,6 @@ mcpb/*.mcpb
 
 # Session
 .tidal-cli/
+
+site/.open-next/
+site/.wrangler/

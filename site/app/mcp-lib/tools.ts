@@ -19,6 +19,8 @@ import { createShareData } from '../../lib/cli/share';
 
 import { getTidalTokens, getAccessTokenUserId, saveTidalTokens } from './redis';
 import { refreshTidalToken } from './tidal-oauth';
+import { TIDAL_CLIENT_ID } from './constants';
+import { createPlaylistFromListData } from '../../lib/cli/playlist-from-list';
 
 async function getClientAndCountry(bearerToken: string): Promise<{ client: any; countryCode: string }> {
   const userId = await getAccessTokenUserId(bearerToken);
@@ -44,7 +46,7 @@ async function getClientAndCountry(bearerToken: string): Promise<{ client: any; 
   const credentialsProvider = {
     bus: new EventTarget(),
     getCredentials: async () => ({
-      clientId: 'PYVtmSHMTGI9oBUs',
+      clientId: TIDAL_CLIENT_ID,
       requestedScopes: [],
       grantedScopes: [],
       token: tokens!.accessToken,
@@ -194,6 +196,17 @@ export function registerTools(server: McpServer) {
   async ({ name, description }, extra) => {
     const { client } = await getClientAndCountry(extractToken(extra));
     return text(await createPlaylistData(name, description, client));
+  });
+
+  server.tool('tidal_playlist_from_list', 'Create a Tidal playlist from a list of "Artist - Title" lines in one call. Each line is matched to a Tidal track only if BOTH artist and title match (diacritics and case ignored); tracks keep the order of the list. Returns what was matched and what was NOT found (with closest candidates). Use dryRun=true first to check matches without creating anything.', {
+    name: z.string().describe('Playlist name'),
+    lines: z.array(z.string()).min(1).max(200).describe('Lines in the form "Artist - Title", in the desired playlist order'),
+    dryRun: z.boolean().optional().default(false).describe('If true, only check the matches and do not create the playlist'),
+    description: z.string().optional().default('').describe('Playlist description'),
+  }, { readOnlyHint: false, destructiveHint: false, openWorldHint: true, title: 'Create Playlist from List' },
+  async ({ name, lines, dryRun, description }, extra) => {
+    const { client, countryCode } = await getClientAndCountry(extractToken(extra));
+    return text(await createPlaylistFromListData(name, lines, client, countryCode, { dryRun, description }));
   });
 
   server.tool('tidal_playlist_rename', 'Rename a playlist', {
