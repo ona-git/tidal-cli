@@ -18,6 +18,7 @@ exports.moveTrackInPlaylistData = moveTrackInPlaylistData;
 exports.moveTrackInPlaylist = moveTrackInPlaylist;
 exports.updatePlaylistDescriptionData = updatePlaylistDescriptionData;
 exports.updatePlaylistDescription = updatePlaylistDescription;
+exports.playlistItemsData = playlistItemsData;
 const auth_1 = require("./auth");
 const pagination_1 = require("./pagination");
 async function listPlaylistsData(client, countryCode) {
@@ -333,4 +334,57 @@ async function updatePlaylistDescription(playlistId, description, json) {
         process.exit(1);
     }
 }
-//# sourceMappingURL=playlist.js.map
+/**
+ * Lists the tracks in a playlist in order, with the track details that differ between
+ * catalog copies of the "same" song (track id, album, ISRC, version, availability).
+ */
+async function playlistItemsData(playlistId, client, countryCode) {
+    const { data: items } = await (0, pagination_1.fetchAllPages)(client, '/playlists/{id}/relationships/items', {
+        path: { id: playlistId },
+        query: { countryCode },
+    });
+    const trackIds = items.filter((i) => i.type === 'tracks').map((i) => i.id);
+    const details = new Map();
+    for (let i = 0; i < trackIds.length; i += 20) {
+        const chunk = [...new Set(trackIds.slice(i, i + 20))];
+        const { data, error } = await client.GET('/tracks', {
+            params: { query: { countryCode, 'filter[id]': [chunk.join(',')], include: ['albums', 'artists'] } },
+        });
+        if (error || !data)
+            throw new Error(`Failed to get tracks — ${JSON.stringify(error)}`);
+        const inc = new Map();
+        for (const x of data.included ?? [])
+            inc.set(`${x.type}:${x.id}`, x);
+        const rows = Array.isArray(data.data) ? data.data : [data.data];
+        for (const row of rows) {
+            if (!row?.id)
+                continue;
+            const albums = (row.relationships?.albums?.data ?? []).map((r) => {
+                const a = inc.get(`albums:${r.id}`);
+                return { id: r.id, title: a?.attributes?.title, barcode: a?.attributes?.barcodeId, releaseDate: a?.attributes?.releaseDate, availability: a?.attributes?.availability };
+            });
+            const artists = (row.relationships?.artists?.data ?? []).map((r) => inc.get(`artists:${r.id}`)?.attributes?.name ?? r.id);
+            details.set(row.id, { attributes: row.attributes ?? {}, albums, artists });
+        }
+    }
+    return items.map((item, index) => {
+        const d = details.get(item.id);
+        const a = d?.attributes ?? {};
+        return {
+            position: index + 1,
+            type: item.type,
+            trackId: item.id,
+            itemId: item.meta?.itemId,
+            addedAt: item.meta?.addedAt,
+            title: a.title,
+            version: a.version ?? null,
+            artists: d?.artists ?? [],
+            isrc: a.isrc,
+            explicit: a.explicit,
+            availability: a.availability,
+            mediaTags: a.mediaTags,
+            albums: d?.albums ?? [],
+            found: !!d,
+        };
+    });
+}

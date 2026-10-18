@@ -50,3 +50,8 @@ export declare function updatePlaylistDescriptionData(playlistId: string, descri
     success: boolean;
 }>;
 export declare function updatePlaylistDescription(playlistId: string, description: string, json: boolean): Promise<void>;
+/**
+ * Lists the tracks in a playlist in order, with the track details that differ between
+ * catalog copies of the "same" song (track id, album, ISRC, version, availability).
+ */
+export declare function playlistItemsData(playlistId: string, client: any, countryCode: string): Promise<Array<Record<string, unknown>>>;
