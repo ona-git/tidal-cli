@@ -18,6 +18,7 @@ import { listSavedItemsData, addSavedItemData, removeSavedItemData } from '../..
 import { createShareData } from '../../lib/cli/share';
 
 import { getTidalTokens, getAccessTokenUserId, saveTidalTokens } from './redis';
+import type { TidalTokens } from './redis';
 import { refreshTidalToken } from './tidal-oauth';
 import { TIDAL_CLIENT_ID } from './constants';
 import { createPlaylistFromListData, checkTracksData } from '../../lib/cli/playlist-from-list';
@@ -26,8 +27,9 @@ async function getClientAndCountry(bearerToken: string): Promise<{ client: any; 
   const userId = await getAccessTokenUserId(bearerToken);
   if (!userId) throw new Error('Unauthorized: invalid token');
 
-  let tokens = await getTidalTokens(userId);
-  if (!tokens) throw new Error('Unauthorized: no Tidal session');
+  const stored = await getTidalTokens(userId);
+  if (!stored) throw new Error('Unauthorized: no Tidal session');
+  let tokens: TidalTokens = stored;
 
   // Refresh if expired
   if (tokens.expiresAt < Date.now() + 60000) {
@@ -38,8 +40,8 @@ async function getClientAndCountry(bearerToken: string): Promise<{ client: any; 
       expiresAt: Date.now() + refreshed.expires_in * 1000,
       countryCode: tokens.countryCode,
       userId: tokens.userId,
-      profileCountry: (tokens as any).profileCountry,
-    } as any;
+      profileCountry: tokens.profileCountry,
+    };
     await saveTidalTokens(userId, tokens);
   }
 
@@ -62,18 +64,18 @@ async function getClientAndCountry(bearerToken: string): Promise<{ client: any; 
   // A wrong country means the wrong catalog: those releases can be label-blocked for the user
   // and show greyed out in the app. The profile country (/users/me) is authoritative; it is
   // looked up once and cached with the tokens.
-  if (!(tokens as any).profileCountry) {
+  if (!tokens.profileCountry) {
     try {
       const profile = await getUserProfileData(client);
       if (profile.country) {
-        tokens = { ...tokens, profileCountry: profile.country } as any;
-        await saveTidalTokens(userId, tokens!);
+        tokens = { ...tokens, profileCountry: profile.country };
+        await saveTidalTokens(userId, tokens);
       }
     } catch {
       // fall through to the fallbacks below
     }
   }
-  const countryCode = (tokens as any).profileCountry || tokens.countryCode || process.env.TIDAL_COUNTRY || 'US';
+  const countryCode = tokens.profileCountry || tokens.countryCode || process.env.TIDAL_COUNTRY || 'US';
 
   return { client, countryCode };
 }
