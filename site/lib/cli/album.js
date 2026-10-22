@@ -56,10 +56,25 @@ async function getAlbumInfoData(albumId, client, countryCode) {
 }
 /** Lists the tracks of an album in order (title, length, explicit flag). */
 async function getAlbumTracksData(albumId, client, countryCode) {
-    const { data: items } = await (0, pagination_1.fetchAllPages)(client, '/albums/{id}/relationships/items', {
-        path: { id: albumId },
-        query: { countryCode },
-    });
+    let items = [];
+    try {
+        ({ data: items } = await (0, pagination_1.fetchAllPages)(client, '/albums/{id}/relationships/items', {
+            path: { id: albumId },
+            query: { countryCode },
+        }));
+    }
+    catch {
+        items = [];
+    }
+    if (!items.length) {
+        // Fallback: the album resource with its items included (same path addAlbumToPlaylistData relies on)
+        const { data, error } = await client.GET('/albums/{id}', {
+            params: { path: { id: albumId }, query: { countryCode, include: ['items'] } },
+        });
+        if (error || !data)
+            throw new Error(`Failed to get album tracks — ${JSON.stringify(error)}`);
+        items = (data.included ?? []).filter((x) => x.type === 'tracks').map((x) => ({ id: x.id, type: 'tracks' }));
+    }
     const tracks = items.filter((i) => i.type === 'tracks');
     const details = new Map();
     const ids = [...new Set(tracks.map((t) => t.id))];
