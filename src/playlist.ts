@@ -454,3 +454,52 @@ export async function playlistItemsData(
     };
   });
 }
+
+
+export interface CreateFromItemsResult {
+  id: string;
+  name: string;
+  tracksAdded: number;
+  tracksRequested: number;
+  failed?: string;
+}
+
+/**
+ * Creates a playlist and fills it with tracks and whole albums in one call, server side:
+ * albums are expanded to their tracks (fetched in parallel), then tracks are added in
+ * sequential chunks of 20 so the order stays exactly as given.
+ */
+export async function createPlaylistFromItemsData(
+  name: string,
+  description: string,
+  items: Array<{ type: 'tracks' | 'albums'; id: string }>,
+  client: any,
+  countryCode: string,
+): Promise<CreateFromItemsResult> {
+  const created = await createPlaylistData(name, description, client);
+
+  const expanded: string[][] = await Promise.all(
+    items.map(async (it) => {
+      if (it.type === 'tracks') return [it.id];
+      const { data, error } = await client.GET('/albums/{id}', {
+        params: { path: { id: it.id }, query: { countryCode, include: ['items'] as any } },
+      });
+      if (error || !data) return [];
+      return ((data as any).included ?? []).filter((x: any) => x.type === 'tracks').map((x: any) => x.id as string);
+    }),
+  );
+  const ids = expanded.flat();
+
+  let added = 0;
+  let failed: string | undefined;
+  for (let i = 0; i < ids.length; i += 20) {
+    const chunk = ids.slice(i, i + 20).map((id) => ({ id, type: 'tracks' }));
+    const { error } = await client.POST('/playlists/{id}/relationships/items' as any, {
+      params: { path: { id: created.id } },
+      body: { data: chunk },
+    });
+    if (error) { failed = `Failed to add tracks ${i + 1}-${i + chunk.length} — ${JSON.stringify(error)}`; break; }
+    added += chunk.length;
+  }
+  return { id: created.id, name: created.name, tracksAdded: added, tracksRequested: ids.length, failed };
+}

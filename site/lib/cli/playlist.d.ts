@@ -55,3 +55,19 @@ export declare function updatePlaylistDescription(playlistId: string, descriptio
  * catalog copies of the "same" song (track id, album, ISRC, version, availability).
  */
 export declare function playlistItemsData(playlistId: string, client: any, countryCode: string): Promise<Array<Record<string, unknown>>>;
+export interface CreateFromItemsResult {
+    id: string;
+    name: string;
+    tracksAdded: number;
+    tracksRequested: number;
+    failed?: string;
+}
+/**
+ * Creates a playlist and fills it with tracks and whole albums in one call, server side:
+ * albums are expanded to their tracks (fetched in parallel), then tracks are added in
+ * sequential chunks of 20 so the order stays exactly as given.
+ */
+export declare function createPlaylistFromItemsData(name: string, description: string, items: Array<{
+    type: 'tracks' | 'albums';
+    id: string;
+}>, client: any, countryCode: string): Promise<CreateFromItemsResult>;

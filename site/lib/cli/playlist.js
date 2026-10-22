@@ -19,6 +19,7 @@ exports.moveTrackInPlaylist = moveTrackInPlaylist;
 exports.updatePlaylistDescriptionData = updatePlaylistDescriptionData;
 exports.updatePlaylistDescription = updatePlaylistDescription;
 exports.playlistItemsData = playlistItemsData;
+exports.createPlaylistFromItemsData = createPlaylistFromItemsData;
 const auth_1 = require("./auth");
 const pagination_1 = require("./pagination");
 async function listPlaylistsData(client, countryCode) {
@@ -388,3 +389,38 @@ async function playlistItemsData(playlistId, client, countryCode) {
         };
     });
 }
+/**
+ * Creates a playlist and fills it with tracks and whole albums in one call, server side:
+ * albums are expanded to their tracks (fetched in parallel), then tracks are added in
+ * sequential chunks of 20 so the order stays exactly as given.
+ */
+async function createPlaylistFromItemsData(name, description, items, client, countryCode) {
+    const created = await createPlaylistData(name, description, client);
+    const expanded = await Promise.all(items.map(async (it) => {
+        if (it.type === 'tracks')
+            return [it.id];
+        const { data, error } = await client.GET('/albums/{id}', {
+            params: { path: { id: it.id }, query: { countryCode, include: ['items'] } },
+        });
+        if (error || !data)
+            return [];
+        return (data.included ?? []).filter((x) => x.type === 'tracks').map((x) => x.id);
+    }));
+    const ids = expanded.flat();
+    let added = 0;
+    let failed;
+    for (let i = 0; i < ids.length; i += 20) {
+        const chunk = ids.slice(i, i + 20).map((id) => ({ id, type: 'tracks' }));
+        const { error } = await client.POST('/playlists/{id}/relationships/items', {
+            params: { path: { id: created.id } },
+            body: { data: chunk },
+        });
+        if (error) {
+            failed = `Failed to add tracks ${i + 1}-${i + chunk.length} — ${JSON.stringify(error)}`;
+            break;
+        }
+        added += chunk.length;
+    }
+    return { id: created.id, name: created.name, tracksAdded: added, tracksRequested: ids.length, failed };
+}
+//# sourceMappingURL=playlist.js.map
