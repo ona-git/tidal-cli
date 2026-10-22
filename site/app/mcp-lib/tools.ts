@@ -13,7 +13,7 @@ import { getRecommendationsData } from '../../lib/cli/recommend';
 import { getMixItemsData } from '../../lib/cli/mix';
 import { getRecentlyAddedData } from '../../lib/cli/history';
 import { getUserProfileData } from '../../lib/cli/user';
-import { getTopSongsData, searchSetlistArtistsData, setSetlistApiKey } from '../../lib/cli/setlist';
+import { getTopSongsData, getNextConcertData, searchSetlistArtistsData, setSetlistApiKey } from '../../lib/cli/setlist';
 import { getCloudflareContext } from '@opennextjs/cloudflare';
 
 async function configureSetlist(): Promise<void> {
@@ -490,6 +490,18 @@ export function registerTools(server: McpServer) {
     await getClientAndCountry(extractToken(extra)); // only signed-in users of this server
     await configureSetlist();
     return text(await getTopSongsData(artist, { songs, recentConcerts }));
+  });
+
+  server.tool('setlist_next_concert', 'Find the next upcoming show of an artist on setlist.fm (optionally in a city or country, or on a given date) and the other acts that have a setlist entry at the same venue on the same day (support bands or festival bill). Returns the nearest show, other upcoming shows and the acts; the running order of the acts is not known.', {
+    artist: z.string().min(1).describe('Artist or band name'),
+    city: z.string().optional().describe('Only shows in this city, e.g. "Leipzig"'),
+    country: z.string().length(2).optional().describe('Only shows in this country, two-letter code, e.g. "DE"'),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe('Only the show on this date (yyyy-mm-dd)'),
+  }, { readOnlyHint: true, destructiveHint: false, openWorldHint: true, title: 'setlist.fm Next Concert' },
+  async ({ artist, city, country, date }, extra) => {
+    await getClientAndCountry(extractToken(extra));
+    await configureSetlist();
+    return text(await getNextConcertData(artist, { city, country, date }));
   });
 
   server.tool('setlist_search_artists', 'Search setlist.fm for artists by name (to tell bands with the same name apart).', {

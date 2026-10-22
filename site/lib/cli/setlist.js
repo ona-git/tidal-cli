@@ -10,6 +10,8 @@ exports.isoDate = isoDate;
 exports.searchSetlistArtistsData = searchSetlistArtistsData;
 exports.computeTopSongs = computeTopSongs;
 exports.getTopSongsData = getTopSongsData;
+exports.pickUpcoming = pickUpcoming;
+exports.getNextConcertData = getNextConcertData;
 const BASE = 'https://api.setlist.fm/rest/1.0';
 const PACE_MS = 600; // stay well under setlist.fm's request rate limit
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -195,3 +197,78 @@ async function getTopSongsData(artistName, options = {}, fetchImpl = fetch) {
         notes,
     };
 }
+function toShow(s) {
+    return {
+        date: isoDate(s.eventDate),
+        venue: s.venue?.name ?? '',
+        venueId: s.venue?.id ?? '',
+        city: s.venue?.city?.name ?? '',
+        country: s.venue?.city?.country?.code ?? '',
+        tour: s.tour?.name || undefined,
+        url: s.url,
+    };
+}
+/** Pure part, exported for tests: filter and order the upcoming shows. */
+function pickUpcoming(setlists, today, filter = {}) {
+    const city = filter.city ? normalizeName(filter.city) : '';
+    const country = (filter.country || '').toUpperCase();
+    return setlists
+        .map(toShow)
+        .filter((x) => x.date >= today)
+        .filter((x) => !city || normalizeName(x.city).includes(city))
+        .filter((x) => !country || x.country === country)
+        .filter((x) => !filter.date || x.date === filter.date)
+        .sort((a, b) => a.date.localeCompare(b.date));
+}
+/**
+ * Finds the next upcoming show of an artist (optionally in a city/country or on a date) and the other acts that
+ * have a setlist entry at the same venue on the same day. setlist.fm has no real "line-up" data, so the acts list
+ * is only as complete as what users entered; their running order is unknown.
+ */
+async function getNextConcertData(artistName, options = {}, fetchImpl = fetch) {
+    const today = options.today ?? new Date().toISOString().slice(0, 10);
+    const artists = await searchSetlistArtistsData(artistName, fetchImpl);
+    if (!artists.length)
+        throw new Error(`No artist called "${artistName}" on setlist.fm`);
+    const wanted = normalizeName(artistName);
+    const artist = artists.find((a) => normalizeName(a.name) === wanted) ?? artists[0];
+    const setlists = [];
+    for (let p = 1; p <= 2; p++) {
+        await sleep(PACE_MS);
+        const data = await sfGet(`/artist/${encodeURIComponent(artist.mbid)}/setlists`, { p }, fetchImpl);
+        const page = data?.setlist ?? [];
+        setlists.push(...page);
+        const total = Number(data?.total ?? 0), per = Number(data?.itemsPerPage ?? 20);
+        if (page.length === 0 || p * per >= total)
+            break;
+    }
+    const upcoming = pickUpcoming(setlists, today, { city: options.city, country: options.country, date: options.date });
+    const notes = [];
+    if (normalizeName(artist.name) !== wanted)
+        notes.push(`Closest setlist.fm match is "${artist.name}"${artist.disambiguation ? ` (${artist.disambiguation})` : ''}; check it is the right band.`);
+    const next = upcoming[0] ?? null;
+    const sameDayActs = [];
+    if (!next) {
+        notes.push('No upcoming show found on setlist.fm for these filters. Tour dates are only listed when a user has entered them.');
+    }
+    else {
+        if (next.venueId) {
+            await sleep(PACE_MS);
+            const [y, m, d] = next.date.split('-');
+            const data = await sfGet('/search/setlists', { venueId: next.venueId, date: `${d}-${m}-${y}`, p: 1 }, fetchImpl);
+            const seen = new Set([artist.mbid]);
+            for (const s of data?.setlist ?? []) {
+                const a = s?.artist;
+                if (!a?.mbid || seen.has(a.mbid))
+                    continue;
+                seen.add(a.mbid);
+                sameDayActs.push({ name: a.name, mbid: a.mbid, songCount: songsOf(s).length });
+            }
+        }
+        notes.push(sameDayActs.length
+            ? 'Other acts are those with a setlist entry at this venue on this day. setlist.fm does not say who plays first; the order on stage is unknown, and the list can be incomplete.'
+            : 'No other acts found for this day on setlist.fm. That does not prove there are none: check the venue or ticket page for the line-up.');
+    }
+    return { artist, upcoming: upcoming.slice(0, 8), next, sameDayActs, notes };
+}
+//# sourceMappingURL=setlist.js.map
