@@ -66,3 +66,43 @@ export declare function getTopSongsData(artistName: string, options?: {
     pages?: number;
     today?: string;
 }, fetchImpl?: typeof fetch): Promise<TopSongsResult>;
+export interface UpcomingShow {
+    date: string;
+    venue: string;
+    venueId: string;
+    city: string;
+    country: string;
+    tour?: string;
+    url?: string;
+}
+export interface NextConcertResult {
+    artist: SetlistArtist;
+    /** Upcoming shows of the artist (today or later), nearest first, after applying the city/country filter */
+    upcoming: UpcomingShow[];
+    /** The nearest matching show (or the one on `date` when given) */
+    next: UpcomingShow | null;
+    /** Other acts with a setlist entry at the same venue on the same day (support bands, festival or package-tour bill); order on stage is NOT known */
+    sameDayActs: {
+        name: string;
+        mbid: string;
+        songCount: number;
+    }[];
+    notes: string[];
+}
+/** Pure part, exported for tests: filter and order the upcoming shows. */
+export declare function pickUpcoming(setlists: any[], today: string, filter?: {
+    city?: string;
+    country?: string;
+    date?: string;
+}): UpcomingShow[];
+/**
+ * Finds the next upcoming show of an artist (optionally in a city/country or on a date) and the other acts that
+ * have a setlist entry at the same venue on the same day. setlist.fm has no real "line-up" data, so the acts list
+ * is only as complete as what users entered; their running order is unknown.
+ */
+export declare function getNextConcertData(artistName: string, options?: {
+    city?: string;
+    country?: string;
+    date?: string;
+    today?: string;
+}, fetchImpl?: typeof fetch): Promise<NextConcertResult>;
