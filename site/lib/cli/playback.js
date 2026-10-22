@@ -106,6 +106,9 @@ async function fetchTrackManifest(trackId, quality) {
     const client = await (0, auth_1.getApiClient)();
     return fetchTrackManifestData(trackId, quality, client);
 }
+function xmlUnescape(v) {
+    return v.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'");
+}
 function decodeManifest(base64Manifest, mimeType) {
     const decoded = Buffer.from(base64Manifest, 'base64').toString('utf-8');
     // JSON manifest (BTS): has urls array
@@ -136,8 +139,8 @@ function decodeManifest(base64Manifest, mimeType) {
             return {
                 type: 'dash',
                 dash: {
-                    initUrl: initMatch[1],
-                    mediaTemplate: mediaMatch[1],
+                    initUrl: xmlUnescape(initMatch[1]),
+                    mediaTemplate: xmlUnescape(mediaMatch[1]),
                     segments: segmentDurations,
                 },
                 codecs: codecsMatch?.[1],
@@ -145,7 +148,7 @@ function decodeManifest(base64Manifest, mimeType) {
         }
         const baseUrlMatch = decoded.match(/<BaseURL>([^<]+)<\/BaseURL>/);
         if (baseUrlMatch) {
-            return { type: 'direct', url: baseUrlMatch[1], codecs: codecsMatch?.[1] };
+            return { type: 'direct', url: xmlUnescape(baseUrlMatch[1]), codecs: codecsMatch?.[1] };
         }
     }
     throw new Error('Unable to parse manifest');

@@ -103,6 +103,10 @@ interface StreamInfo {
   codecs?: string;
 }
 
+function xmlUnescape(v: string): string {
+  return v.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'");
+}
+
 function decodeManifest(base64Manifest: string, mimeType: string): StreamInfo {
   const decoded = Buffer.from(base64Manifest, 'base64').toString('utf-8');
 
@@ -136,8 +140,8 @@ function decodeManifest(base64Manifest: string, mimeType: string): StreamInfo {
       return {
         type: 'dash',
         dash: {
-          initUrl: initMatch[1],
-          mediaTemplate: mediaMatch[1],
+          initUrl: xmlUnescape(initMatch[1]),
+          mediaTemplate: xmlUnescape(mediaMatch[1]),
           segments: segmentDurations,
         },
         codecs: codecsMatch?.[1],
@@ -146,7 +150,7 @@ function decodeManifest(base64Manifest: string, mimeType: string): StreamInfo {
 
     const baseUrlMatch = decoded.match(/<BaseURL>([^<]+)<\/BaseURL>/);
     if (baseUrlMatch) {
-      return { type: 'direct', url: baseUrlMatch[1], codecs: codecsMatch?.[1] };
+      return { type: 'direct', url: xmlUnescape(baseUrlMatch[1]), codecs: codecsMatch?.[1] };
     }
   }
 
