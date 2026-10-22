@@ -8,7 +8,7 @@ import { getTrackInfoData, getTrackRadioData, getTrackByIsrcData, getSimilarTrac
 import { getAlbumInfoData, getAlbumByBarcodeData } from '../../lib/cli/album';
 import { listPlaylistsData, createPlaylistData, renamePlaylistData, deletePlaylistData, addTrackToPlaylistData, removeTrackFromPlaylistData, addAlbumToPlaylistData, moveTrackInPlaylistData, updatePlaylistDescriptionData, playlistItemsData } from '../../lib/cli/playlist';
 import { addToLibraryData, removeFromLibraryData, listFavoritedPlaylistsData, addPlaylistToFavoritesData, removePlaylistFromFavoritesData } from '../../lib/cli/library';
-import { playbackInfoData, playbackUrlData } from '../../lib/cli/playback';
+import { playbackInfoData, playbackUrlData, playbackAudioData } from '../../lib/cli/playback';
 import { getRecommendationsData } from '../../lib/cli/recommend';
 import { getMixItemsData } from '../../lib/cli/mix';
 import { getRecentlyAddedData } from '../../lib/cli/history';
@@ -381,6 +381,16 @@ export function registerTools(server: McpServer) {
   async ({ trackId, quality }, extra) => {
     const { client } = await getClientAndCountry(extractToken(extra));
     return text(await playbackUrlData(trackId, quality, client));
+  });
+
+  server.tool('tidal_preview_audio', 'Download a track preview on the server and return it as base64 audio (audio/mp4) so sandboxed clients can play it. Segment 1 includes the init segment; concatenate chunks in order. Uses low quality to keep the payload small.', {
+    trackId: z.string().describe('Track ID'),
+    from: z.number().int().min(1).optional().default(1).describe('First segment (1-based)'),
+    count: z.number().int().min(1).max(16).optional().default(16).describe('Number of segments'),
+  }, { readOnlyHint: true, destructiveHint: false, openWorldHint: true, title: 'Preview Audio' },
+  async ({ trackId, from, count }, extra) => {
+    const { client } = await getClientAndCountry(extractToken(extra));
+    return text(await playbackAudioData(trackId, 'LOW', from, count, client));
   });
 
   // === Recommendations ===
