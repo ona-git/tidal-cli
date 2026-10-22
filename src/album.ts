@@ -1,4 +1,5 @@
 import { getApiClient, getCountryCode } from './auth';
+import { fetchAllPages } from './pagination';
 import type { AlbumInfo, AlbumResult } from './types';
 export type { AlbumInfo, AlbumResult };
 
@@ -52,6 +53,48 @@ export async function getAlbumInfoData(albumId: string, client: any, countryCode
     barcodeId: attrs.barcodeId,
     coverUrl,
   };
+}
+
+export interface AlbumTrack {
+  position: number;
+  trackId: string;
+  title?: string;
+  version?: string | null;
+  duration: string;
+  explicit?: boolean;
+  volume?: number;
+}
+
+/** Lists the tracks of an album in order (title, length, explicit flag). */
+export async function getAlbumTracksData(albumId: string, client: any, countryCode: string): Promise<AlbumTrack[]> {
+  const { data: items } = await fetchAllPages(client, '/albums/{id}/relationships/items', {
+    path: { id: albumId },
+    query: { countryCode },
+  });
+  const tracks = items.filter((i: any) => i.type === 'tracks');
+  const details = new Map<string, any>();
+  const ids: string[] = [...new Set<string>(tracks.map((t: any) => t.id))];
+  for (let i = 0; i < ids.length; i += 20) {
+    const chunk = ids.slice(i, i + 20);
+    const { data, error } = await client.GET('/tracks' as any, {
+      params: { query: { countryCode, 'filter[id]': [chunk.join(',')] } as any },
+    });
+    if (error || !data) throw new Error(`Failed to get tracks — ${JSON.stringify(error)}`);
+    const rows = Array.isArray((data as any).data) ? (data as any).data : [(data as any).data];
+    for (const row of rows) if (row?.id) details.set(row.id, row.attributes ?? {});
+  }
+  return tracks.map((t: any, index: number) => {
+    const a = details.get(t.id) ?? {};
+    return {
+      position: index + 1,
+      trackId: t.id,
+      title: a.title,
+      version: a.version ?? null,
+      duration: formatDuration(a.duration),
+      explicit: a.explicit,
+      volume: t.meta?.volumeNumber,
+    };
+  });
 }
 
 export async function getAlbumInfo(albumId: string, json: boolean): Promise<void> {

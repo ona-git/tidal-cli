@@ -1,10 +1,12 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getAlbumInfoData = getAlbumInfoData;
+exports.getAlbumTracksData = getAlbumTracksData;
 exports.getAlbumInfo = getAlbumInfo;
 exports.getAlbumByBarcodeData = getAlbumByBarcodeData;
 exports.getAlbumByBarcode = getAlbumByBarcode;
 const auth_1 = require("./auth");
+const pagination_1 = require("./pagination");
 function formatDuration(isoDuration) {
     if (!isoDuration)
         return '';
@@ -51,6 +53,40 @@ async function getAlbumInfoData(albumId, client, countryCode) {
         barcodeId: attrs.barcodeId,
         coverUrl,
     };
+}
+/** Lists the tracks of an album in order (title, length, explicit flag). */
+async function getAlbumTracksData(albumId, client, countryCode) {
+    const { data: items } = await (0, pagination_1.fetchAllPages)(client, '/albums/{id}/relationships/items', {
+        path: { id: albumId },
+        query: { countryCode },
+    });
+    const tracks = items.filter((i) => i.type === 'tracks');
+    const details = new Map();
+    const ids = [...new Set(tracks.map((t) => t.id))];
+    for (let i = 0; i < ids.length; i += 20) {
+        const chunk = ids.slice(i, i + 20);
+        const { data, error } = await client.GET('/tracks', {
+            params: { query: { countryCode, 'filter[id]': [chunk.join(',')] } },
+        });
+        if (error || !data)
+            throw new Error(`Failed to get tracks — ${JSON.stringify(error)}`);
+        const rows = Array.isArray(data.data) ? data.data : [data.data];
+        for (const row of rows)
+            if (row?.id)
+                details.set(row.id, row.attributes ?? {});
+    }
+    return tracks.map((t, index) => {
+        const a = details.get(t.id) ?? {};
+        return {
+            position: index + 1,
+            trackId: t.id,
+            title: a.title,
+            version: a.version ?? null,
+            duration: formatDuration(a.duration),
+            explicit: a.explicit,
+            volume: t.meta?.volumeNumber,
+        };
+    });
 }
 async function getAlbumInfo(albumId, json) {
     const client = await (0, auth_1.getApiClient)();

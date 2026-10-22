@@ -5,7 +5,7 @@ import { createAPIClient } from '@tidal-music/api';
 import { searchData, searchSuggestionsData } from '../../lib/cli/search';
 import { getArtistInfoData, getArtistTracksData, getArtistAlbumsData, getSimilarArtistsData, getArtistRadioData } from '../../lib/cli/artist';
 import { getTrackInfoData, getTrackRadioData, getTrackByIsrcData, getSimilarTracksData } from '../../lib/cli/track';
-import { getAlbumInfoData, getAlbumByBarcodeData } from '../../lib/cli/album';
+import { getAlbumTracksData, getAlbumInfoData, getAlbumByBarcodeData } from '../../lib/cli/album';
 import { listPlaylistsData, createPlaylistData, renamePlaylistData, deletePlaylistData, addTrackToPlaylistData, removeTrackFromPlaylistData, addAlbumToPlaylistData, moveTrackInPlaylistData, updatePlaylistDescriptionData, playlistItemsData } from '../../lib/cli/playlist';
 import { addToLibraryData, removeFromLibraryData, listFavoritedPlaylistsData, addPlaylistToFavoritesData, removePlaylistFromFavoritesData } from '../../lib/cli/library';
 import { playbackInfoData, playbackUrlData, playbackAudioData } from '../../lib/cli/playback';
@@ -199,6 +199,14 @@ export function registerTools(server: McpServer) {
   });
 
   // === Album ===
+  server.tool('tidal_album_tracks', 'List the tracks of an album in order (track id, title, length, explicit flag)', {
+    albumId: z.string().describe('Album ID'),
+  }, { readOnlyHint: true, destructiveHint: false, openWorldHint: true, title: 'Album Tracks' },
+  async ({ albumId }, extra) => {
+    const { client, countryCode } = await getClientAndCountry(extractToken(extra));
+    return text(await getAlbumTracksData(albumId, client, countryCode));
+  });
+
   server.tool('tidal_album_info', 'Get album details including artists and cover art', {
     albumId: z.string().describe('Tidal album ID'),
   }, { readOnlyHint: true, destructiveHint: false, openWorldHint: true, title: 'Album Info' },
