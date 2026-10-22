@@ -67,10 +67,23 @@ export interface AlbumTrack {
 
 /** Lists the tracks of an album in order (title, length, explicit flag). */
 export async function getAlbumTracksData(albumId: string, client: any, countryCode: string): Promise<AlbumTrack[]> {
-  const { data: items } = await fetchAllPages(client, '/albums/{id}/relationships/items', {
-    path: { id: albumId },
-    query: { countryCode },
-  });
+  let items: any[] = [];
+  try {
+    ({ data: items } = await fetchAllPages(client, '/albums/{id}/relationships/items', {
+      path: { id: albumId },
+      query: { countryCode },
+    }));
+  } catch {
+    items = [];
+  }
+  if (!items.length) {
+    // Fallback: the album resource with its items included (same path addAlbumToPlaylistData relies on)
+    const { data, error } = await client.GET('/albums/{id}', {
+      params: { path: { id: albumId }, query: { countryCode, include: ['items'] as any } },
+    });
+    if (error || !data) throw new Error(`Failed to get album tracks — ${JSON.stringify(error)}`);
+    items = ((data as any).included ?? []).filter((x: any) => x.type === 'tracks').map((x: any) => ({ id: x.id, type: 'tracks' }));
+  }
   const tracks = items.filter((i: any) => i.type === 'tracks');
   const details = new Map<string, any>();
   const ids: string[] = [...new Set<string>(tracks.map((t: any) => t.id))];
