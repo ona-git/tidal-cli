@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.playbackInfoData = playbackInfoData;
 exports.playbackInfo = playbackInfo;
 exports.playbackUrlData = playbackUrlData;
+exports.playbackAudioData = playbackAudioData;
 exports.playbackUrl = playbackUrl;
 exports.playbackPlay = playbackPlay;
 const auth_1 = require("./auth");
@@ -220,6 +221,38 @@ async function playbackUrlData(trackId, quality, client) {
         };
     }
     throw new Error('No stream URL available for this track.');
+}
+/**
+ * Downloads (a range of) the DASH segments of a track on the server and returns them as base64,
+ * so clients that cannot reach Tidal's CDN themselves (e.g. sandboxed pages) can play the audio.
+ * Segment 1 comes with the init segment, so the chunks of one track can be concatenated in order.
+ */
+async function playbackAudioData(trackId, quality, from, count, client) {
+    const info = await fetchTrackManifestData(trackId, quality, client);
+    const stream = decodeManifest(info.manifest, info.manifestMimeType);
+    const base = { trackId: info.trackId, audioQuality: info.audioQuality, presentation: info.trackPresentation, mimeType: 'audio/mp4' };
+    const get = async (url, what) => {
+        const res = await fetch(url);
+        if (!res.ok)
+            throw new Error(`Failed to download ${what} (${res.status})`);
+        return Buffer.from(await res.arrayBuffer());
+    };
+    if (stream.type === 'direct' && stream.url) {
+        const buf = await get(stream.url, 'audio');
+        return { ...base, segmentCount: 1, from: 1, count: 1, includesInit: false, bytes: buf.length, base64: buf.toString('base64') };
+    }
+    if (!stream.dash)
+        throw new Error('No stream available for this track.');
+    const total = stream.dash.segments.length;
+    const start = Math.max(1, Math.floor(from));
+    const nums = stream.dash.segments.filter((n) => n >= start && n < start + Math.max(1, Math.floor(count)));
+    const parts = [];
+    if (start === 1)
+        parts.push(await get(stream.dash.initUrl, 'init segment'));
+    const segs = await Promise.all(nums.map((n) => get(stream.dash.mediaTemplate.replace('$Number$', String(n)), `segment ${n}`)));
+    parts.push(...segs);
+    const buf = Buffer.concat(parts);
+    return { ...base, segmentCount: total, from: start, count: nums.length, includesInit: start === 1, bytes: buf.length, base64: buf.toString('base64') };
 }
 async function playbackUrl(trackId, quality, json) {
     const client = await (0, auth_1.getApiClient)();
