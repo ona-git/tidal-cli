@@ -8,7 +8,7 @@ import {
   getTidalTokens,
   saveTidalTokens,
 } from '../../mcp-lib/redis';
-import { generateId, refreshTidalToken } from '../../mcp-lib/tidal-oauth';
+import { generateId, renewTidalTokens, TidalTokenError, TIDAL_REFRESH_MARGIN_MS } from '../../mcp-lib/tidal-oauth';
 
 export async function POST(req: NextRequest) {
   const body = await req.formData().catch(() => null);
@@ -75,19 +75,18 @@ async function handleRefreshToken(params: Record<string, any>) {
 
   // Check if Tidal tokens need refresh
   const tidalTokens = await getTidalTokens(userId);
-  if (tidalTokens && tidalTokens.expiresAt < Date.now() + 60000) {
+  if (!tidalTokens) {
+    return NextResponse.json({ error: 'invalid_grant', error_description: 'No Tidal session' }, { status: 400 });
+  }
+  if (tidalTokens.expiresAt < Date.now() + TIDAL_REFRESH_MARGIN_MS) {
     try {
-      const refreshed = await refreshTidalToken(tidalTokens.refreshToken);
-      await saveTidalTokens(userId, {
-        accessToken: refreshed.access_token,
-        refreshToken: refreshed.refresh_token,
-        expiresAt: Date.now() + refreshed.expires_in * 1000,
-        countryCode: tidalTokens.countryCode,
-        userId: tidalTokens.userId,
-      });
-    } catch {
-      // Tidal refresh failed — the user will need to re-auth
-      return NextResponse.json({ error: 'invalid_grant', error_description: 'Tidal session expired' }, { status: 400 });
+      await saveTidalTokens(userId, await renewTidalTokens(tidalTokens));
+    } catch (err) {
+      // Only a rejected refresh token means the user must sign in again; anything else is temporary.
+      if (err instanceof TidalTokenError && err.isInvalidGrant) {
+        return NextResponse.json({ error: 'invalid_grant', error_description: 'Tidal session expired' }, { status: 400 });
+      }
+      return NextResponse.json({ error: 'server_error', error_description: 'Tidal is unreachable, try again' }, { status: 503 });
     }
   }
 

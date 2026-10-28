@@ -46,7 +46,7 @@ export async function GET(req: NextRequest) {
   const userId = generateId();
   await saveTidalTokens(userId, {
     accessToken: tokenResponse.access_token,
-    refreshToken: tokenResponse.refresh_token,
+    refreshToken: tokenResponse.refresh_token ?? '',
     expiresAt: Date.now() + tokenResponse.expires_in * 1000,
     countryCode: tokenResponse.user?.countryCode,
     userId: tokenResponse.user?.userId,
