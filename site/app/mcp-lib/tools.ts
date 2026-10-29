@@ -34,7 +34,7 @@ import { createShareData } from '../../lib/cli/share';
 
 import { getTidalTokens, getAccessTokenUserId, saveTidalTokens } from './redis';
 import type { TidalTokens } from './redis';
-import { refreshTidalToken } from './tidal-oauth';
+import { renewTidalTokens, TIDAL_REFRESH_MARGIN_MS } from './tidal-oauth';
 import { TIDAL_CLIENT_ID } from './constants';
 import { createPlaylistFromListData, checkTracksData } from '../../lib/cli/playlist-from-list';
 
@@ -46,17 +46,9 @@ async function getClientAndCountry(bearerToken: string): Promise<{ client: any; 
   if (!stored) throw new Error('Unauthorized: no Tidal session');
   let tokens: TidalTokens = stored;
 
-  // Refresh if expired
-  if (tokens.expiresAt < Date.now() + 60000) {
-    const refreshed = await refreshTidalToken(tokens.refreshToken);
-    tokens = {
-      accessToken: refreshed.access_token,
-      refreshToken: refreshed.refresh_token,
-      expiresAt: Date.now() + refreshed.expires_in * 1000,
-      countryCode: tokens.countryCode,
-      userId: tokens.userId,
-      profileCountry: tokens.profileCountry,
-    };
+  // Refresh if expired or about to expire
+  if (tokens.expiresAt < Date.now() + TIDAL_REFRESH_MARGIN_MS) {
+    tokens = await renewTidalTokens(tokens);
     await saveTidalTokens(userId, tokens);
   }
 
