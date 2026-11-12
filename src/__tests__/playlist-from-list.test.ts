@@ -5,13 +5,19 @@ vi.mock('../playlist', () => ({ createPlaylistData: vi.fn() }));
 
 import { searchData } from '../search';
 import { createPlaylistData } from '../playlist';
-import { normalize, parseList, createPlaylistFromListData } from '../playlist-from-list';
+import { normalize, parseList, createPlaylistFromListData, titleRelation, artistRelation } from '../playlist-from-list';
 
 const tracks: Record<string, { title: string; artists: string[] }> = {
   '1': { title: 'Vigil', artists: ['Fyrnask'] },
   '2': { title: 'Vigil', artists: ['Someone Else'] },
   '3': { title: 'Jarðeldr', artists: ['Fyrnask'] },
   '4': { title: 'Wretched (Remastered 2020)', artists: ['Final Dose'] },
+  '5': { title: 'Schwarze Welt', artists: ['Xmal Deutschland'] },
+  '6': { title: 'Only Control', artists: ['Pouppée Fabrikk'] },
+  '7': { title: 'Only Control', artists: ['Some Rapper'] },
+  '8': { title: 'Kiss Your Shadow', artists: ['In Strict Confidence'] },
+  '9': { title: 'Kiss Your Shadow (Extended Version)', artists: ['In Strict Confidence'] },
+  '10': { title: 'Kiss In The Shadows', artists: ['Other Band'] },
 };
 
 const client = {
@@ -86,5 +92,38 @@ describe('createPlaylistFromListData', () => {
     expect(r.duplicates).toEqual(['Fyrnask - Vigil']);
     expect(r.playlist).toBeUndefined();
     expect(createPlaylistData).not.toHaveBeenCalled();
+  });
+
+  it('accepts artist spelling variants found through the title (hyphen, doubled letter)', async () => {
+    const r = await createPlaylistFromListData('Test', ['X-Mal Deutschland - Schwarze Welt', 'Poupée Fabrikk - Only Control'], client, 'DE', { dryRun: true });
+    expect(r.matched.map((m) => [m.trackId, m.match, m.tidalArtists[0]])).toEqual([['5', 'exact', 'Xmal Deutschland'], ['6', 'exact', 'Pouppée Fabrikk']]);
+    expect(r.notFound).toEqual([]);
+  });
+
+  it('accepts a slightly wrong title when the artist is exact, preferring the plain version', async () => {
+    const r = await createPlaylistFromListData('Test', ['In Strict Confidence - Kiss the Shadow'], client, 'DE', { dryRun: true });
+    expect(r.matched.map((m) => [m.trackId, m.match])).toEqual([['8', 'fuzzy']]);
+  });
+
+  it('does not stack a fuzzy title on a fuzzy artist', async () => {
+    const r = await createPlaylistFromListData('Test', ['In Strikt Confidence - Kiss the Shadow'], client, 'DE', { dryRun: true });
+    expect(r.matched).toEqual([]);
+  });
+});
+
+describe('titleRelation / artistRelation', () => {
+  it('keeps different titles and artists apart', () => {
+    expect(titleRelation('Control', 'No Control')).toBe('none');
+    expect(titleRelation('Only Control', 'Total Control')).toBe('none');
+    expect(titleRelation('The Kiss', 'Kiss')).toBe('none');
+    expect(titleRelation('Kiss the Shadow', 'Kiss In The Shadows')).toBe('none');
+    expect(titleRelation('Kiss the Shadow', 'Kiss Your Shadow')).toBe('fuzzy');
+    expect(titleRelation('Body to Body', 'Body2Body')).toBe('none');
+    expect(artistRelation('X-Mal Deutschland', 'XMAL DEUTSCHLAND')).toBe('close');
+    expect(artistRelation('Poupée Fabrikk', 'Pouppée Fabrikk')).toBe('close');
+    expect(artistRelation('The Sisters of Mercy', 'Sisters of Mercy')).toBe('close');
+    expect(artistRelation('Fyrnask', 'Fyrnast')).toBe('none');
+    expect(artistRelation('Front 242', 'Front 424')).toBe('none');
+    expect(artistRelation('Nobody', 'Someone Else')).toBe('none');
   });
 });

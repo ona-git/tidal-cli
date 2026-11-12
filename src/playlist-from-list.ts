@@ -13,8 +13,12 @@ export interface MatchedEntry {
   trackId: string;
   tidalTitle: string;
   tidalArtists: string[];
-  /** 'exact' = same artist and same title; 'variant' = same artist, title with an extra suffix (e.g. "(Remastered)") */
-  match: 'exact' | 'variant';
+  /**
+   * 'exact' = same title; 'variant' = title with an extra suffix (e.g. "(Remastered)");
+   * 'fuzzy' = nearly the same title (one small word or a typo differs, e.g. "Kiss the Shadow" → "Kiss Your Shadow").
+   * The artist always has to match, allowing for spelling variants such as "X-Mal" / "Xmal".
+   */
+  match: 'exact' | 'variant' | 'fuzzy';
   /** Can this track be streamed by a subscriber in the user's country? null = TIDAL gave no usable information. */
   playable: boolean | null;
 }
@@ -68,20 +72,91 @@ export function parseList(lines: string[]): { entries: ListEntry[]; invalid: str
   return { entries, invalid };
 }
 
-function titleRelation(wanted: string, found: string): 'exact' | 'variant' | 'none' {
+/** normalize() without spaces, so "X-Mal Deutschland" and "Xmal Deutschland" compare equal. */
+function compact(s: string): string {
+  return normalize(s).replace(/ /g, '');
+}
+
+/** Edit distance (Levenshtein), used only on short strings such as names and titles. */
+export function editDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+/** 1 = identical, 0 = nothing in common. */
+function similarity(a: string, b: string): number {
+  const len = Math.max(a.length, b.length);
+  return len === 0 ? 1 : 1 - editDistance(a, b) / len;
+}
+
+// Small words that set lists and catalogs often swap ("Kiss the Shadow" vs "Kiss Your Shadow").
+const FILLER = new Set(['the', 'a', 'an', 'your', 'my', 'our', 'his', 'her', 'their', 'of', 'to', 'in', 'on', 'and', 'der', 'die', 'das', 'ein', 'eine', 'le', 'la', 'les', 'el', 'il']);
+
+function coreWords(s: string): string {
+  return normalize(s).split(' ').filter((w) => w && !FILLER.has(w)).join(' ');
+}
+
+export type TitleRelation = 'exact' | 'variant' | 'fuzzy' | 'none';
+
+export function titleRelation(wanted: string, found: string): TitleRelation {
+  const w = normalize(wanted);
+  const f = normalize(found);
+  if (!w || !f) return 'none';
+  if (w === f || compact(wanted) === compact(found)) return 'exact';
+  // Same title with a suffix such as "Remastered 2020", "Live", "Radio Edit" is accepted only as variant.
+  if (f.startsWith(w + ' ')) return 'variant';
+  // Nearly the same title: only filler words differ, or a small typo in a title that is long enough.
+  const cw = coreWords(wanted);
+  const cf = coreWords(found);
+  if (cw && cw === cf && cw.includes(' ')) return 'fuzzy';
+  const cwc = w.replace(/ /g, '');
+  const cfc = f.replace(/ /g, '');
+  if (Math.min(cwc.length, cfc.length) >= 8 && similarity(cwc, cfc) >= 0.85) return 'fuzzy';
+  return 'none';
+}
+
+/**
+ * 'exact' = same name after normalizing; 'close' = the same name spelled differently on Tidal:
+ * hyphens or spaces ("X-Mal" / "XMAL"), a leading "The", or a letter off in a long name ("Poupée Fabrikk" / "Pouppée Fabrikk").
+ */
+export function artistRelation(wanted: string, found: string): 'exact' | 'close' | 'none' {
   const w = normalize(wanted);
   const f = normalize(found);
   if (!w || !f) return 'none';
   if (w === f) return 'exact';
-  // Same title with a suffix such as "Remastered 2020", "Live", "Radio Edit" is accepted only as variant.
-  if (f.startsWith(w + ' ')) return 'variant';
+  const strip = (x: string) => x.replace(/^the /, '').replace(/ /g, '');
+  const wc = strip(w);
+  const fc = strip(f);
+  if (wc === fc) return 'close';
+  // A typo is tolerated only in long names and never in digits ("Front 242" is not "Front 424").
+  if (wc.replace(/\D/g, '') !== fc.replace(/\D/g, '')) return 'none';
+  const shorter = Math.min(wc.length, fc.length);
+  const d = editDistance(wc, fc);
+  if ((shorter >= 10 && d <= 1) || (shorter >= 16 && d <= 2)) return 'close';
   return 'none';
 }
 
-function artistMatches(wanted: string, found: string[]): boolean {
-  const w = normalize(wanted);
-  return found.some((a) => normalize(a) === w);
+function artistMatch(wanted: string, found: string[]): 'exact' | 'close' | 'none' {
+  let best: 'exact' | 'close' | 'none' = 'none';
+  for (const a of found) {
+    const r = artistRelation(wanted, a);
+    if (r === 'exact') return r;
+    if (r === 'close') best = r;
+  }
+  return best;
 }
+
+const TITLE_SCORE = { exact: 30, variant: 20, fuzzy: 10, none: 0 } as const;
 
 type TrackInfoLite = { title: string; artists: string[]; playable: boolean | null };
 
@@ -151,10 +226,12 @@ async function findTrack(
   client: any,
   countryCode: string,
 ): Promise<{ hit?: MatchedEntry; candidates: MissingEntry['candidates'] }> {
+  // 1) artist + title, 2) title alone: Tidal often spells the artist differently, so the second search
+  //    shows which artists have this title, and artistRelation() decides whether one of them is the wanted band.
   const queries = [`${entry.artist} ${entry.title}`, entry.title];
   const seen = new Map<string, TrackInfoLite>();
-  let variant: MatchedEntry | undefined;
-  let blocked: MatchedEntry | undefined; // exact match that exists but cannot be streamed in this country
+  let best: { hit: MatchedEntry; score: number } | undefined;
+  let blocked: { hit: MatchedEntry; score: number } | undefined; // match that exists but cannot be streamed in this country
 
   for (const query of queries) {
     const results = await searchData('track', query, client, countryCode);
@@ -168,18 +245,22 @@ async function findTrack(
       const info = infos.get(r.id);
       if (!info) continue;
       seen.set(r.id, info);
-      if (!artistMatches(entry.artist, info.artists)) continue;
+      const art = artistMatch(entry.artist, info.artists);
+      if (art === 'none') continue;
       const rel = titleRelation(entry.title, info.title);
       if (rel === 'none') continue;
+      // A fuzzy title is only trusted with the exact artist name, so two guesses never stack up.
+      if (rel === 'fuzzy' && art !== 'exact') continue;
+      const score = TITLE_SCORE[rel] + (art === 'exact' ? 5 : 0);
       const hit: MatchedEntry = { line: entry.raw, trackId: r.id, tidalTitle: info.title, tidalArtists: info.artists, match: rel, playable: info.playable };
       if (info.playable === false) {
-        if (!blocked) blocked = hit;
+        if (!blocked || score > blocked.score) blocked = { hit, score };
         continue;
       }
-      if (rel === 'exact') return { hit, candidates: [] };
-      if (!variant) variant = hit;
+      if (!best || score > best.score) best = { hit, score };
     }
-    if (variant) return { hit: variant, candidates: [] };
+    // Exact title or a version of it: good enough, skip the title-only search.
+    if (best && best.score >= TITLE_SCORE.variant) return { hit: best.hit, candidates: [] };
 
     // Keep a few unfiltered results (title only) as suggestions in case nothing matched.
     for (const r of results.slice(0, 5)) {
@@ -187,14 +268,15 @@ async function findTrack(
     }
   }
 
-  if (blocked) return { hit: blocked, candidates: [] };
+  if (best) return { hit: best.hit, candidates: [] };
+  if (blocked) return { hit: blocked.hit, candidates: [] };
   const candidates = [...seen.entries()].slice(0, 5).map(([trackId, v]) => ({ trackId, title: v.title, artists: v.artists }));
   return { candidates };
 }
 
 /**
- * Takes lines in the form "Artist - Title", resolves each to a Tidal track requiring an exact artist
- * match, creates one playlist in list order and reports what could not be found.
+ * Takes lines in the form "Artist - Title", resolves each to a Tidal track requiring the artist to
+ * match (spelling variants allowed), creates one playlist in list order and reports what could not be found.
  * With dryRun = true nothing is created.
  */
 export async function createPlaylistFromListData(
