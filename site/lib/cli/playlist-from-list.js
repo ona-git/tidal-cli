@@ -2,6 +2,9 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.normalize = normalize;
 exports.parseList = parseList;
+exports.editDistance = editDistance;
+exports.titleRelation = titleRelation;
+exports.artistRelation = artistRelation;
 exports.checkTracksData = checkTracksData;
 exports.createPlaylistFromListData = createPlaylistFromListData;
 const search_1 = require("./search");
@@ -37,22 +40,96 @@ function parseList(lines) {
     }
     return { entries, invalid };
 }
+/** normalize() without spaces, so "X-Mal Deutschland" and "Xmal Deutschland" compare equal. */
+function compact(s) {
+    return normalize(s).replace(/ /g, '');
+}
+/** Edit distance (Levenshtein), used only on short strings such as names and titles. */
+function editDistance(a, b) {
+    if (a === b)
+        return 0;
+    if (!a.length)
+        return b.length;
+    if (!b.length)
+        return a.length;
+    let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+    for (let i = 1; i <= a.length; i++) {
+        const cur = [i];
+        for (let j = 1; j <= b.length; j++) {
+            cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+        }
+        prev = cur;
+    }
+    return prev[b.length];
+}
+/** 1 = identical, 0 = nothing in common. */
+function similarity(a, b) {
+    const len = Math.max(a.length, b.length);
+    return len === 0 ? 1 : 1 - editDistance(a, b) / len;
+}
+// Small words that set lists and catalogs often swap ("Kiss the Shadow" vs "Kiss Your Shadow").
+const FILLER = new Set(['the', 'a', 'an', 'your', 'my', 'our', 'his', 'her', 'their', 'of', 'to', 'in', 'on', 'and', 'der', 'die', 'das', 'ein', 'eine', 'le', 'la', 'les', 'el', 'il']);
+function coreWords(s) {
+    return normalize(s).split(' ').filter((w) => w && !FILLER.has(w)).join(' ');
+}
 function titleRelation(wanted, found) {
+    const w = normalize(wanted);
+    const f = normalize(found);
+    if (!w || !f)
+        return 'none';
+    if (w === f || compact(wanted) === compact(found))
+        return 'exact';
+    // Same title with a suffix such as "Remastered 2020", "Live", "Radio Edit" is accepted only as variant.
+    if (f.startsWith(w + ' '))
+        return 'variant';
+    // Nearly the same title: only filler words differ, or a small typo in a title that is long enough.
+    const cw = coreWords(wanted);
+    const cf = coreWords(found);
+    if (cw && cw === cf && cw.includes(' '))
+        return 'fuzzy';
+    const cwc = w.replace(/ /g, '');
+    const cfc = f.replace(/ /g, '');
+    if (Math.min(cwc.length, cfc.length) >= 8 && similarity(cwc, cfc) >= 0.85)
+        return 'fuzzy';
+    return 'none';
+}
+/**
+ * 'exact' = same name after normalizing; 'close' = the same name spelled differently on Tidal:
+ * hyphens or spaces ("X-Mal" / "XMAL"), a leading "The", or a letter off in a long name ("Poupée Fabrikk" / "Pouppée Fabrikk").
+ */
+function artistRelation(wanted, found) {
     const w = normalize(wanted);
     const f = normalize(found);
     if (!w || !f)
         return 'none';
     if (w === f)
         return 'exact';
-    // Same title with a suffix such as "Remastered 2020", "Live", "Radio Edit" is accepted only as variant.
-    if (f.startsWith(w + ' '))
-        return 'variant';
+    const strip = (x) => x.replace(/^the /, '').replace(/ /g, '');
+    const wc = strip(w);
+    const fc = strip(f);
+    if (wc === fc)
+        return 'close';
+    // A typo is tolerated only in long names and never in digits ("Front 242" is not "Front 424").
+    if (wc.replace(/\D/g, '') !== fc.replace(/\D/g, ''))
+        return 'none';
+    const shorter = Math.min(wc.length, fc.length);
+    const d = editDistance(wc, fc);
+    if ((shorter >= 10 && d <= 1) || (shorter >= 16 && d <= 2))
+        return 'close';
     return 'none';
 }
-function artistMatches(wanted, found) {
-    const w = normalize(wanted);
-    return found.some((a) => normalize(a) === w);
+function artistMatch(wanted, found) {
+    let best = 'none';
+    for (const a of found) {
+        const r = artistRelation(wanted, a);
+        if (r === 'exact')
+            return r;
+        if (r === 'close')
+            best = r;
+    }
+    return best;
 }
+const TITLE_SCORE = { exact: 30, variant: 20, fuzzy: 10, none: 0 };
 /**
  * One call for up to 20 tracks: GET /tracks?filter[id]=...&include=artists,usageRules
  * `playable` = TIDAL's usage rules for the user's country allow STREAM for subscribers (or free tier);
@@ -114,10 +191,12 @@ async function checkTracksData(trackIds, client, countryCode) {
     return result;
 }
 async function findTrack(entry, client, countryCode) {
+    // 1) artist + title, 2) title alone: Tidal often spells the artist differently, so the second search
+    //    shows which artists have this title, and artistRelation() decides whether one of them is the wanted band.
     const queries = [`${entry.artist} ${entry.title}`, entry.title];
     const seen = new Map();
-    let variant;
-    let blocked; // exact match that exists but cannot be streamed in this country
+    let best;
+    let blocked; // match that exists but cannot be streamed in this country
     for (const query of queries) {
         const results = await (0, search_1.searchData)('track', query, client, countryCode);
         // Only look up artists for tracks whose title is plausibly the wanted one (keeps API calls low).
@@ -130,38 +209,44 @@ async function findTrack(entry, client, countryCode) {
             if (!info)
                 continue;
             seen.set(r.id, info);
-            if (!artistMatches(entry.artist, info.artists))
+            const art = artistMatch(entry.artist, info.artists);
+            if (art === 'none')
                 continue;
             const rel = titleRelation(entry.title, info.title);
             if (rel === 'none')
                 continue;
+            // A fuzzy title is only trusted with the exact artist name, so two guesses never stack up.
+            if (rel === 'fuzzy' && art !== 'exact')
+                continue;
+            const score = TITLE_SCORE[rel] + (art === 'exact' ? 5 : 0);
             const hit = { line: entry.raw, trackId: r.id, tidalTitle: info.title, tidalArtists: info.artists, match: rel, playable: info.playable };
             if (info.playable === false) {
-                if (!blocked)
-                    blocked = hit;
+                if (!blocked || score > blocked.score)
+                    blocked = { hit, score };
                 continue;
             }
-            if (rel === 'exact')
-                return { hit, candidates: [] };
-            if (!variant)
-                variant = hit;
+            if (!best || score > best.score)
+                best = { hit, score };
         }
-        if (variant)
-            return { hit: variant, candidates: [] };
+        // Exact title or a version of it: good enough, skip the title-only search.
+        if (best && best.score >= TITLE_SCORE.variant)
+            return { hit: best.hit, candidates: [] };
         // Keep a few unfiltered results (title only) as suggestions in case nothing matched.
         for (const r of results.slice(0, 5)) {
             if (!seen.has(r.id))
                 seen.set(r.id, { title: r.name, artists: [], playable: null });
         }
     }
+    if (best)
+        return { hit: best.hit, candidates: [] };
     if (blocked)
-        return { hit: blocked, candidates: [] };
+        return { hit: blocked.hit, candidates: [] };
     const candidates = [...seen.entries()].slice(0, 5).map(([trackId, v]) => ({ trackId, title: v.title, artists: v.artists }));
     return { candidates };
 }
 /**
- * Takes lines in the form "Artist - Title", resolves each to a Tidal track requiring an exact artist
- * match, creates one playlist in list order and reports what could not be found.
+ * Takes lines in the form "Artist - Title", resolves each to a Tidal track requiring the artist to
+ * match (spelling variants allowed), creates one playlist in list order and reports what could not be found.
  * With dryRun = true nothing is created.
  */
 async function createPlaylistFromListData(name, lines, client, countryCode, options = {}) {
@@ -220,3 +305,4 @@ async function createPlaylistFromListData(name, lines, client, countryCode, opti
     result.playlist = { id: created.id, name: created.name, url: `https://tidal.com/playlist/${created.id}` };
     return result;
 }
+//# sourceMappingURL=playlist-from-list.js.map

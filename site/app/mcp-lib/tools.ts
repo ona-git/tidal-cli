@@ -245,7 +245,7 @@ export function registerTools(server: McpServer) {
     return text(await createPlaylistFromItemsData(name, description, items, client, countryCode));
   });
 
-  server.tool('tidal_playlist_from_list', 'Create a Tidal playlist from a list of "Artist - Title" lines in one call. Each line is matched to a Tidal track only if BOTH artist and title match (diacritics and case ignored); tracks keep the order of the list. Returns what was matched and what was NOT found (with closest candidates). Use dryRun=true first to check matches without creating anything.', {
+  server.tool('tidal_playlist_from_list', 'Create a Tidal playlist from a list of "Artist - Title" lines in one call. Each line is matched to a Tidal track only if BOTH artist and title match. Case, diacritics and punctuation are ignored, artist spelling variants are accepted ("X-Mal Deutschland" = "Xmal Deutschland"), and with the exact artist a nearly identical title is accepted too (reported as match "fuzzy"); tracks keep the order of the list. Returns what was matched and what was NOT found (with closest candidates). Use dryRun=true first to check matches without creating anything.', {
     name: z.string().describe('Playlist name'),
     lines: z.array(z.string()).min(1).max(200).describe('Lines in the form "Artist - Title", in the desired playlist order'),
     dryRun: z.boolean().optional().default(false).describe('If true, only check the matches and do not create the playlist'),
