@@ -52,7 +52,7 @@ async function fetchPage(
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    const { data, error } = await client.GET(path, { params: requestParams });
+    const { data, error, response } = await client.GET(path, { params: requestParams });
 
     if (!error && data) {
       const pageData = (data as any).data ?? [];
@@ -68,7 +68,8 @@ async function fetchPage(
       }
       lastError = undefined;
     } else {
-      lastError = error;
+      // openapi-fetch gives `error: undefined` for a failed response with an empty body (e.g. HTTP 429)
+      lastError = error ?? (response?.status ? { status: response.status } : undefined);
     }
 
     if (attempt < MAX_ATTEMPTS) await sleep(retryDelayMs);

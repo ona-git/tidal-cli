@@ -1,5 +1,5 @@
 import { searchData } from './search';
-import { createPlaylistData } from './playlist';
+import { createPlaylistData, addTrackIdsToPlaylistData } from './playlist';
 import { getWithRetry, sleep } from './retry';
 
 export interface ListEntry {
@@ -245,16 +245,9 @@ export async function createPlaylistFromListData(
   if (options.dryRun || matched.length === 0) return result;
 
   const created = await createPlaylistData(name, options.description ?? '', client);
-  const CHUNK = 20; // sequential chunks keep the original order
-  for (let i = 0; i < matched.length; i += CHUNK) {
-    const chunk = matched.slice(i, i + CHUNK).map((m) => ({ id: m.trackId, type: 'tracks' }));
-    const { error } = await client.POST('/playlists/{id}/relationships/items' as any, {
-      params: { path: { id: created.id } },
-      body: { data: chunk },
-    });
-    if (error) {
-      throw new Error(`Playlist ${created.id} was created but adding tracks ${i + 1}-${i + chunk.length} failed — ${JSON.stringify(error)}`);
-    }
+  const { added, failed } = await addTrackIdsToPlaylistData(created.id, matched.map((m) => m.trackId), client);
+  if (failed) {
+    throw new Error(`Playlist ${created.id} was created but only ${added} of ${matched.length} tracks were added. ${failed}`);
   }
 
   result.playlist = { id: created.id, name: created.name, url: `https://tidal.com/playlist/${created.id}` };

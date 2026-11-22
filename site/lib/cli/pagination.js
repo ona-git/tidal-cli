@@ -30,7 +30,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function fetchPage(client, path, requestParams, retryDelayMs) {
     let lastError;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-        const { data, error } = await client.GET(path, { params: requestParams });
+        const { data, error, response } = await client.GET(path, { params: requestParams });
         if (!error && data) {
             const pageData = data.data ?? [];
             // A non-empty page is always real. An empty page may be a transient glitch,
@@ -46,7 +46,8 @@ async function fetchPage(client, path, requestParams, retryDelayMs) {
             lastError = undefined;
         }
         else {
-            lastError = error;
+            // openapi-fetch gives `error: undefined` for a failed response with an empty body (e.g. HTTP 429)
+            lastError = error ?? (response?.status ? { status: response.status } : undefined);
         }
         if (attempt < MAX_ATTEMPTS)
             await sleep(retryDelayMs);
