@@ -9,3 +9,21 @@ export declare function getWithRetry(client: any, path: string, options: any, ma
     error?: any;
     response?: any;
 }>;
+/**
+ * Runs a write call (POST/PATCH/DELETE) with retry/backoff.
+ *
+ * openapi-fetch returns `{ error: undefined }` for a failed response with an empty body
+ * (for example HTTP 429 with Content-Length 0). Checking only `error` then treats a
+ * rejected write as a success, which silently drops tracks. So success here means: no
+ * error AND, when the HTTP response is known, a 2xx status.
+ * Retries on 429, 5xx, a thrown network error or a failed response without a body.
+ */
+export declare function writeWithRetry(call: () => Promise<{
+    data?: any;
+    error?: any;
+    response?: any;
+}>, maxRetries?: number, baseDelayMs?: number): Promise<{
+    ok: boolean;
+    status?: number;
+    error?: any;
+}>;

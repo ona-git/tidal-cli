@@ -1,7 +1,10 @@
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 
 vi.mock('../search', () => ({ searchData: vi.fn() }));
-vi.mock('../playlist', () => ({ createPlaylistData: vi.fn() }));
+vi.mock('../playlist', async (orig) => {
+  const real: any = await orig();
+  return { createPlaylistData: vi.fn(), addTrackIdsToPlaylistData: (pid: string, ids: string[], client: any) => real.addTrackIdsToPlaylistData(pid, ids, client, { paceMs: 0, retryDelayMs: 0 }) };
+});
 
 import { searchData } from '../search';
 import { createPlaylistData } from '../playlist';

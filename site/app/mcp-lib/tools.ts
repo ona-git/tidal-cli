@@ -6,7 +6,7 @@ import { searchData, searchSuggestionsData } from '../../lib/cli/search';
 import { getArtistInfoData, getArtistTracksData, getArtistAlbumsData, getSimilarArtistsData, getArtistRadioData } from '../../lib/cli/artist';
 import { getTrackInfoData, getTrackRadioData, getTrackByIsrcData, getSimilarTracksData } from '../../lib/cli/track';
 import { getAlbumTracksData, getAlbumInfoData, getAlbumByBarcodeData } from '../../lib/cli/album';
-import { createPlaylistFromItemsData, listPlaylistsData, createPlaylistData, renamePlaylistData, deletePlaylistData, addTrackToPlaylistData, removeTrackFromPlaylistData, addAlbumToPlaylistData, moveTrackInPlaylistData, updatePlaylistDescriptionData, playlistItemsData } from '../../lib/cli/playlist';
+import { createPlaylistFromItemsData, addTracksToPlaylistData, listPlaylistsData, createPlaylistData, renamePlaylistData, deletePlaylistData, addTrackToPlaylistData, removeTrackFromPlaylistData, addAlbumToPlaylistData, moveTrackInPlaylistData, updatePlaylistDescriptionData, playlistItemsData } from '../../lib/cli/playlist';
 import { addToLibraryData, removeFromLibraryData, listFavoritedPlaylistsData, addPlaylistToFavoritesData, removePlaylistFromFavoritesData } from '../../lib/cli/library';
 import { playbackInfoData, playbackUrlData, playbackAudioData } from '../../lib/cli/playback';
 import { getRecommendationsData } from '../../lib/cli/recommend';
@@ -232,7 +232,7 @@ export function registerTools(server: McpServer) {
     return text(await createPlaylistData(name, description, client));
   });
 
-  server.tool('tidal_playlist_create_from_ids', 'Create a playlist and fill it in ONE call with tracks and whole albums by Tidal ID, in the given order (albums are expanded to their tracks on the server). Much faster than adding items one by one.', {
+  server.tool('tidal_playlist_create_from_ids', 'Create a playlist and fill it in ONE call with tracks and whole albums by Tidal ID, in the given order (albums are expanded to their tracks on the server). Much faster than adding items one by one. The playlist is read back afterwards: tracksAdded / tracksInPlaylist are what Tidal really holds, missingTrackIds lists what did not land (add them with tidal_playlist_add_tracks).', {
     name: z.string().describe('Playlist name'),
     description: z.string().optional().default('').describe('Playlist description'),
     items: z.array(z.object({
@@ -243,6 +243,15 @@ export function registerTools(server: McpServer) {
   async ({ name, description, items }, extra) => {
     const { client, countryCode } = await getClientAndCountry(extractToken(extra));
     return text(await createPlaylistFromItemsData(name, description, items, client, countryCode));
+  });
+
+  server.tool('tidal_playlist_add_tracks', 'Add many tracks by Tidal ID to an existing playlist, in the given order (appended at the end, sent in chunks of 20 with retries). The playlist is read back afterwards: returns tracksInPlaylist (what Tidal really holds) and missingTrackIds (requested ids that did not land).', {
+    playlistId: z.string().describe('Playlist ID'),
+    trackIds: z.array(z.string()).min(1).max(300).describe('Track IDs in the order to append'),
+  }, { readOnlyHint: false, destructiveHint: false, openWorldHint: true, title: 'Add Tracks to Playlist' },
+  async ({ playlistId, trackIds }, extra) => {
+    const { client, countryCode } = await getClientAndCountry(extractToken(extra));
+    return text(await addTracksToPlaylistData(playlistId, trackIds, client, countryCode));
   });
 
   server.tool('tidal_playlist_from_list', 'Create a Tidal playlist from a list of "Artist - Title" lines in one call. Each line is matched to a Tidal track only if BOTH artist and title match (diacritics and case ignored); tracks keep the order of the list. Returns what was matched and what was NOT found (with closest candidates). Use dryRun=true first to check matches without creating anything.', {

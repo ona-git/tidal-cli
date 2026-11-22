@@ -205,3 +205,4 @@ async function searchSuggestions(query, json) {
         process.exit(1);
     }
 }
+//# sourceMappingURL=search.js.map

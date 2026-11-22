@@ -19,9 +19,14 @@ exports.moveTrackInPlaylist = moveTrackInPlaylist;
 exports.updatePlaylistDescriptionData = updatePlaylistDescriptionData;
 exports.updatePlaylistDescription = updatePlaylistDescription;
 exports.playlistItemsData = playlistItemsData;
+exports.playlistTrackIdsData = playlistTrackIdsData;
+exports.missingIds = missingIds;
+exports.addTrackIdsToPlaylistData = addTrackIdsToPlaylistData;
+exports.addTracksToPlaylistData = addTracksToPlaylistData;
 exports.createPlaylistFromItemsData = createPlaylistFromItemsData;
 const auth_1 = require("./auth");
 const pagination_1 = require("./pagination");
+const retry_1 = require("./retry");
 async function listPlaylistsData(client, countryCode) {
     const { data } = await (0, pagination_1.fetchAllPages)(client, '/playlists', {
         query: {
@@ -158,14 +163,14 @@ async function deletePlaylist(playlistId, json) {
     }
 }
 async function addTrackToPlaylistData(playlistId, trackId, client) {
-    const { error } = await client.POST('/playlists/{id}/relationships/items', {
+    const r = await (0, retry_1.writeWithRetry)(() => client.POST('/playlists/{id}/relationships/items', {
         params: { path: { id: playlistId } },
         body: {
             data: [{ id: trackId, type: 'tracks' }],
         },
-    });
-    if (error) {
-        throw new Error(`Failed to add track — ${JSON.stringify(error)}`);
+    }));
+    if (!r.ok) {
+        throw new Error(`Failed to add track — ${JSON.stringify(r.error)}`);
     }
     return { playlistId, trackId, added: true };
 }
@@ -235,12 +240,9 @@ async function addAlbumToPlaylistData(playlistId, albumId, client, countryCode) 
     if (trackIds.length === 0) {
         throw new Error('No tracks found in album.');
     }
-    const { error } = await client.POST('/playlists/{id}/relationships/items', {
-        params: { path: { id: playlistId } },
-        body: { data: trackIds },
-    });
-    if (error) {
-        throw new Error(`Failed to add album tracks — ${JSON.stringify(error)}`);
+    const { added, failed } = await addTrackIdsToPlaylistData(playlistId, trackIds.map((t) => t.id), client);
+    if (failed) {
+        throw new Error(added ? `Added ${added} of ${trackIds.length} album tracks. ${failed}` : `Failed to add album tracks — ${failed}`);
     }
     return { playlistId, albumId, tracksAdded: trackIds.length };
 }
@@ -389,38 +391,124 @@ async function playlistItemsData(playlistId, client, countryCode) {
         };
     });
 }
+const ADD_CHUNK = 20;
+const ADD_PACE_MS = 300;
+/** Counts the items of a playlist by reading every page. Returns the item track ids in order. */
+async function playlistTrackIdsData(playlistId, client, countryCode) {
+    const { data } = await (0, pagination_1.fetchAllPages)(client, '/playlists/{id}/relationships/items', {
+        path: { id: playlistId },
+        query: { countryCode },
+    });
+    return data.map((i) => String(i.id));
+}
+/** Ids in `wanted` that are not covered by `present` (counts duplicates), keeping the order of `wanted`. */
+function missingIds(wanted, present) {
+    const left = new Map();
+    for (const id of present)
+        left.set(id, (left.get(id) ?? 0) + 1);
+    const out = [];
+    for (const id of wanted) {
+        const n = left.get(id) ?? 0;
+        if (n > 0)
+            left.set(id, n - 1);
+        else
+            out.push(id);
+    }
+    return out;
+}
+/**
+ * Adds tracks to a playlist in order, in sequential chunks of 20 with retry/backoff.
+ * A chunk counts as added only on a confirmed 2xx answer; stops at the first chunk that
+ * still fails after retries, so the playlist keeps the given order.
+ */
+async function addTrackIdsToPlaylistData(playlistId, trackIds, client, options = {}) {
+    const pace = options.paceMs ?? ADD_PACE_MS;
+    let added = 0;
+    for (let i = 0; i < trackIds.length; i += ADD_CHUNK) {
+        if (i > 0 && pace > 0)
+            await (0, retry_1.sleep)(pace);
+        const chunk = trackIds.slice(i, i + ADD_CHUNK).map((id) => ({ id, type: 'tracks' }));
+        const r = await (0, retry_1.writeWithRetry)(() => client.POST('/playlists/{id}/relationships/items', {
+            params: { path: { id: playlistId } },
+            body: { data: chunk },
+        }), 4, options.retryDelayMs ?? 800);
+        if (!r.ok) {
+            return { added, failed: `Failed to add tracks ${i + 1}-${i + chunk.length}${r.status ? ` (HTTP ${r.status})` : ''} — ${JSON.stringify(r.error)}` };
+        }
+        added += chunk.length;
+    }
+    return { added };
+}
+/** Reads the playlist back (once more after a short pause if items seem missing) and reports what is really there. */
+async function verifyPlaylist(playlistId, wanted, client, countryCode, verifyDelayMs) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+            const present = await playlistTrackIdsData(playlistId, client, countryCode);
+            const missing = missingIds(wanted, present);
+            if (!missing.length || attempt === 1)
+                return { count: present.length, missing };
+        }
+        catch {
+            if (attempt === 1)
+                return { count: null, missing: [] };
+        }
+        await (0, retry_1.sleep)(verifyDelayMs);
+    }
+    return { count: null, missing: [] };
+}
+/**
+ * Adds tracks (by id, in order) to an existing playlist and reads the playlist back to
+ * report how many tracks it really holds and which of the given ids are not in it.
+ */
+async function addTracksToPlaylistData(playlistId, trackIds, client, countryCode, options = {}) {
+    const before = await playlistTrackIdsData(playlistId, client, countryCode).catch(() => null);
+    const { added, failed } = await addTrackIdsToPlaylistData(playlistId, trackIds, client, options);
+    const wanted = [...(before ?? []), ...trackIds];
+    const v = before ? await verifyPlaylist(playlistId, wanted, client, countryCode, options.verifyDelayMs ?? 1500) : { count: null, missing: [] };
+    const missing = v.count === null ? trackIds.slice(added) : v.missing;
+    return {
+        playlistId,
+        tracksRequested: trackIds.length,
+        tracksAdded: v.count === null || !before ? added : Math.max(0, v.count - before.length),
+        tracksInPlaylist: v.count,
+        missingTrackIds: missing,
+        failed: failed ?? (missing.length ? `Tidal has ${v.count} tracks in the playlist; ${missing.length} of the requested tracks are missing` : undefined),
+    };
+}
 /**
  * Creates a playlist and fills it with tracks and whole albums in one call, server side:
  * albums are expanded to their tracks (fetched in parallel), then tracks are added in
- * sequential chunks of 20 so the order stays exactly as given.
+ * sequential chunks of 20 so the order stays exactly as given. Afterwards the playlist is
+ * read back, so tracksAdded is what Tidal really holds, not what was sent.
  */
-async function createPlaylistFromItemsData(name, description, items, client, countryCode) {
+async function createPlaylistFromItemsData(name, description, items, client, countryCode, options = {}) {
     const created = await createPlaylistData(name, description, client);
     const expanded = await Promise.all(items.map(async (it) => {
         if (it.type === 'tracks')
             return [it.id];
-        const { data, error } = await client.GET('/albums/{id}', {
+        const { data, error } = await (0, retry_1.getWithRetry)(client, '/albums/{id}', {
             params: { path: { id: it.id }, query: { countryCode, include: ['items'] } },
-        });
+        }, 3, options.retryDelayMs ?? 600);
         if (error || !data)
             return [];
         return (data.included ?? []).filter((x) => x.type === 'tracks').map((x) => x.id);
     }));
     const ids = expanded.flat();
-    let added = 0;
-    let failed;
-    for (let i = 0; i < ids.length; i += 20) {
-        const chunk = ids.slice(i, i + 20).map((id) => ({ id, type: 'tracks' }));
-        const { error } = await client.POST('/playlists/{id}/relationships/items', {
-            params: { path: { id: created.id } },
-            body: { data: chunk },
-        });
-        if (error) {
-            failed = `Failed to add tracks ${i + 1}-${i + chunk.length} — ${JSON.stringify(error)}`;
-            break;
-        }
-        added += chunk.length;
-    }
-    return { id: created.id, name: created.name, tracksAdded: added, tracksRequested: ids.length, failed };
+    const { added, failed } = await addTrackIdsToPlaylistData(created.id, ids, client, options);
+    const v = await verifyPlaylist(created.id, ids, client, countryCode, options.verifyDelayMs ?? 1500);
+    const inPlaylist = v.count;
+    const missing = inPlaylist === null ? ids.slice(added) : v.missing;
+    let note = failed;
+    if (!note && missing.length)
+        note = `Tidal holds ${inPlaylist} of ${ids.length} tracks after adding; ${missing.length} are missing`;
+    return {
+        id: created.id,
+        name: created.name,
+        tracksAdded: inPlaylist ?? added,
+        tracksRequested: ids.length,
+        tracksInPlaylist: inPlaylist,
+        missingTrackIds: missing,
+        failed: note,
+    };
 }
 //# sourceMappingURL=playlist.js.map
